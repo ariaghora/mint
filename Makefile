@@ -1,5 +1,5 @@
-CFLAGS=-Wall -g -pedantic -fopenmp -lblas -I/opt/homebrew/opt/openblas/include
+CFLAGS=-Wall -O3 -g -pedantic -lblas -I/opt/homebrew/opt/openblas/include 
 
-.PHONY: imagenet
-imagenet: imagenet.c mint.h
-	clang -o imagenet imagenet.c $(CFLAGS)
+.PHONY: alexnet
+alexnet: alexnet.c mint.h
+	clang -o alexnet alexnet.c $(CFLAGS)
