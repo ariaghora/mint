@@ -194,36 +194,6 @@ int mt__tensor_count_element(mt_tensor *t) {
     return count;
 }
 
-void mt__im2row(mt_tensor *t, mt_float *row_data, int K_h, int K_w, int stride,
-                int pad) {
-    int C_in = t->shape[0], H_in = t->shape[1], W_in = t->shape[2];
-    int H_out = (H_in + 2 * pad - K_h) / stride + 1;
-    int W_out = (W_in + 2 * pad - K_w) / stride + 1;
-
-    int row = 0;
-    for (int h_out = 0; h_out < H_out; h_out++) {
-        for (int w_out = 0; w_out < W_out; w_out++) {
-            for (int c_in = 0; c_in < C_in; c_in++) {
-                for (int kh = 0; kh < K_h; kh++) {
-                    for (int kw = 0; kw < K_w; kw++) {
-                        int h_in = h_out * stride + kh - pad;
-                        int w_in = w_out * stride + kw - pad;
-
-                        if (h_in >= 0 && h_in < H_in && w_in >= 0 &&
-                            w_in < W_in) {
-                            row_data[row] = t->data[c_in * H_in * W_in +
-                                                    h_in * W_in + w_in];
-                        } else {
-                            row_data[row] = 0;
-                        }
-                        row++;
-                    }
-                }
-            }
-        }
-    }
-}
-
 mt_tensor *mt_adaptive_avg_pool_2d(mt_tensor *x, int out_h, int out_w) {
     MT_ASSERT_F(x->ndim == 3,
                 "input tensor must have 3 dimensions (an image), found %d",
