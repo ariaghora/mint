@@ -12,31 +12,44 @@
 extern "C" {
 #endif
 
-#define MAX_NDIM 5
-#define MAX_GLOBAL_TENSOR_COUNT 1000
-
 // The tensor values data type
 #define mt_float float
 
 // The tensor representation
-typedef struct mt_tensor {
-  mt_float *data;
+typedef struct mt_tensor mt_tensor;
 
-  int ndim;
-  int shape[MAX_NDIM];
-  int count_deps;
-} mt_tensor;
+typedef struct mt_model mt_model;
 
+typedef enum mt_layer_kind {
+  MT_LAYER_UNKNOWN,
+  MT_LAYER_AVG_POOL_2D,
+  MT_LAYER_CONV_2D,
+  MT_LAYER_DENSE,
+  MT_LAYER_FLATTEN,
+  MT_LAYER_LOCAL_RESPONSE_NORM,
+  MT_LAYER_MAX_POOL_2D,
+  MT_LAYER_RELU,
+  MT_LAYER_SIGMOID,
+} mt_layer_kind;
+
+/*
+ * Ops API
+ */
 mt_tensor *mt_adaptive_avg_pool_2d(mt_tensor *x, int out_h, int out_w);
 mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b);
 mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
                           int pad);
 void       mt_image_standardize(mt_tensor *t, mt_float *mu, mt_float *std);
+mt_tensor *mt_local_response_norm(mt_tensor *t, int size, mt_float alpha,
+                                  mt_float beta, mt_float k);
 mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b);
 mt_tensor *mt_max_pool_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
                           int pad);
 void       mt_relu_inplace(mt_tensor *t);
-void       mt_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim);
+
+/*
+ * Tensor API
+ */
 mt_tensor *mt_tensor_alloc(int *shape, int ndim);
 mt_tensor *mt_tensor_alloc_fill(int *shape, int ndim, mt_float value);
 mt_tensor *mt_tensor_alloc_values(int *shape, int ndim, mt_float *values);
@@ -44,31 +57,128 @@ mt_tensor *mt_tensor_alloc_random(int *shape, int ndim);
 mt_tensor *mt_tensor_fread(FILE *fp);
 void       mt_tensor_free(mt_tensor *t);
 mt_tensor *mt_tensor_load_image(char *filename);
+void mt_tensor_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim);
+
+/*
+ * Model API
+ */
+mt_model *mt_model_load(const char *filename);
+void      mt_model_free(mt_model *model);
 
 /**
  *
  * IMPLEMENTATION
  *
  */
-#include <assert.h>
+// #include <assert.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
+#define MAX_LAYER_COUNT 1000
+#define MAX_LAYER_INPUT_COUNT 10
+#define MAX_LAYER_OUTPUT_COUNT 10
+#define MAX_LAYER_PREV_COUNT 5
+#define MAX_LAYER_NEXT_COUNT 5
+#define MAX_MODEL_INITIALIZER_COUNT 1000
+#define MAX_TENSOR_NDIM 5
+
+typedef struct mt_tensor {
+  mt_float *data;
+
+  int ndim;
+  int shape[MAX_TENSOR_NDIM];
+  int count_deps;
+} mt_tensor;
+
+typedef struct {
+  int           id;
+  mt_layer_kind kind;
+  union {
+    // MT_LAYER_CONV_2D
+    struct {
+      int size;
+      int stride;
+    } avg_pool_2d;
+
+    // MT_LAYER_CONV_2D
+    struct {
+      int w_id;
+      int b_id;
+      int stride;
+      int pad;
+    } conv_2d;
+
+    // MT_LAYER_DENSE
+    struct {
+      int w_id;
+      int b_id;
+    } dense;
+
+    // MT_LAYER_FLATTEN
+    struct {
+      int axis;
+    } flatten;
+
+    // MT_LAYER_LOCAL_RESPONSE_NORM
+    struct {
+      int      size;
+      mt_float alpha;
+      mt_float beta;
+      mt_float bias;
+    } local_response_norm;
+
+    // MT_LAYER_MAX_POOL_2D
+    struct {
+      int size;
+      int stride;
+      int pad;
+    } max_pool_2d;
+  } data;
+  int prev[MAX_LAYER_PREV_COUNT];
+  int next[MAX_LAYER_NEXT_COUNT];
+  int inputs[MAX_LAYER_INPUT_COUNT];
+  int outputs[MAX_LAYER_OUTPUT_COUNT];
+} mt_layer;
+
+typedef struct mt_model {
+  int        layer_count;
+  int        tensor_count;
+  mt_layer  *layers[MAX_LAYER_COUNT];
+  mt_tensor *tensors[MAX_MODEL_INITIALIZER_COUNT];
+} mt_model;
+
 #define MT_ARR_INT(...) ((int[]){__VA_ARGS__})
 #define MT_ARR_FLOAT(...) ((mt_float[]){__VA_ARGS__})
 
 #ifdef NDEBUG
-  #define MT_ASSERT(condition, format, ...) ((void)0)
+  #define MT_ASSERT_F(condition, format, ...) ((void)0)
 #else
-  #define MT_ASSERT(condition, format, ...)                                    \
+  #define MT_ASSERT_F(condition, format, ...)                                  \
     do {                                                                       \
       if (!(condition)) {                                                      \
         fprintf(stderr, "\x1b[31m");                                           \
         fprintf(stderr, "Assertion failed [%s:%d]: %s\n", __FILE__, __LINE__,  \
                 #condition);                                                   \
         fprintf(stderr, format, __VA_ARGS__);                                  \
+        fprintf(stderr, "\n");                                                 \
+        fprintf(stderr, "\x1b[0m");                                            \
+        abort();                                                               \
+      }                                                                        \
+    } while (0)
+#endif
+
+#ifdef NDEBUG
+  #define MT_ASSERT(condition, msg) ((void)0)
+#else
+  #define MT_ASSERT(condition, msg)                                            \
+    do {                                                                       \
+      if (!(condition)) {                                                      \
+        fprintf(stderr, "\x1b[31m");                                           \
+        fprintf(stderr, "Assertion failed [%s:%d]: %s\n", __FILE__, __LINE__,  \
+                #condition);                                                   \
+        fprintf(stderr, msg);                                                  \
         fprintf(stderr, "\n");                                                 \
         fprintf(stderr, "\x1b[0m");                                            \
         abort();                                                               \
@@ -113,7 +223,9 @@ void mt__im2row(mt_tensor *t, mt_float *row_data, int K_h, int K_w, int stride,
 }
 
 mt_tensor *mt_adaptive_avg_pool_2d(mt_tensor *x, int out_h, int out_w) {
-  assert(x->ndim == 3); // Ensure input is a 3D tensor (C, H, W)
+  MT_ASSERT_F(x->ndim == 3,
+              "input tensor must have 3 dimensions (an image), found %d",
+              x->ndim);
 
   int   channels = x->shape[0];
   int   in_h     = x->shape[1];
@@ -152,10 +264,10 @@ mt_tensor *mt_adaptive_avg_pool_2d(mt_tensor *x, int out_h, int out_w) {
 }
 
 mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b) {
-  MT_ASSERT(b->ndim == 1, "`b` must be of dimension 2, found %d", b->ndim);
-  MT_ASSERT(w->shape[1] == b->shape[0],
-            "Width of `w` (%d) must match length of `b` (%d)", w->shape[1],
-            b->shape[0]);
+  MT_ASSERT_F(b->ndim == 1, "`b` must be of dimension 2, found %d", b->ndim);
+  MT_ASSERT_F(w->shape[1] == b->shape[0],
+              "Width of `w` (%d) must match length of `b` (%d)", w->shape[1],
+              b->shape[0]);
 
   mt_tensor *res = mt_matmul(x, w);
 
@@ -174,11 +286,11 @@ mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b) {
 
 mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
                           int pad) {
-  assert(x->ndim == 3);
-  assert(w->ndim == 4);
-  assert(b->ndim == 1);
-  assert(x->shape[0] == w->shape[1]);
-  assert(b->shape[0] == w->shape[0]);
+  MT_ASSERT(x->ndim == 3, "");
+  MT_ASSERT(w->ndim == 4, "");
+  MT_ASSERT(b->ndim == 1, "");
+  MT_ASSERT(x->shape[0] == w->shape[1], "");
+  MT_ASSERT(b->shape[0] == w->shape[0], "");
 
   int C_in = x->shape[0];
   int H_in = x->shape[1];
@@ -321,7 +433,7 @@ mt_tensor *mt__matmul_backend(mt_tensor *a, mt_tensor *b) {
 }
 
 void mt_image_standardize(mt_tensor *t, mt_float *mu, mt_float *std) {
-  assert(t->ndim == 3);
+  MT_ASSERT(t->ndim == 3, "");
   int h = t->shape[1];
   int w = t->shape[2];
   for (int c = 0; c < 3; ++c) {
@@ -335,15 +447,16 @@ void mt_image_standardize(mt_tensor *t, mt_float *mu, mt_float *std) {
 }
 
 mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b) {
-  assert(a->ndim == 2);
-  assert(b->ndim == 2);
-  assert(a->shape[1] == b->shape[0]);
+  MT_ASSERT(a->ndim == 2, "A must be a matrix (2d tensor)");
+  MT_ASSERT(b->ndim == 2, "B must be a matrix (2d tensor)");
+  MT_ASSERT(a->shape[1] == b->shape[0],
+            "incompatible shape for matrix multiplication");
 
   return mt__matmul_backend(a, b);
 }
 
 mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int pad) {
-  assert(x->ndim == 3);
+  MT_ASSERT(x->ndim == 3, "");
 
   int C    = x->shape[0];
   int H_in = x->shape[1];
@@ -397,7 +510,7 @@ void mt_relu_inplace(mt_tensor *t) {
   }
 }
 
-void mt_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim) {
+void mt_tensor_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim) {
   int tensor_old_element_len = mt__tensor_count_element(t);
 
   // zero-out old shape for the sake of safety
@@ -410,14 +523,14 @@ void mt_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim) {
     t->shape[i] = new_shape[i];
   }
 
-  MT_ASSERT(tensor_old_element_len == tensor_new_element_len,
-            "tensor with length %d cannot be reshaped into length of %d",
-            tensor_old_element_len, tensor_new_element_len);
+  MT_ASSERT_F(tensor_old_element_len == tensor_new_element_len,
+              "tensor with length %d cannot be reshaped into length of %d",
+              tensor_old_element_len, tensor_new_element_len);
   t->ndim = new_ndim;
 }
 
 mt_tensor *mt_tensor_alloc(int *shape, int ndim) {
-  assert(ndim <= MAX_NDIM);
+  MT_ASSERT(ndim <= MAX_TENSOR_NDIM, "");
 
   mt_tensor *t  = (mt_tensor *)calloc(1, sizeof(*t));
   t->ndim       = ndim;
@@ -506,6 +619,93 @@ mt_tensor *mt_tensor_load_image(char *filename) {
   return t;
 }
 #endif
+
+mt_model *mt_model_load(const char *filename) {
+  FILE *fp = fopen(filename, "rb");
+  MT_ASSERT_F(fp != NULL, "failed to open %s", filename);
+  mt_model *model = (mt_model *)malloc(sizeof(*model));
+
+  // First, we read model header.
+  fread(&model->layer_count, sizeof(int), 1, fp);
+  fread(&model->tensor_count, sizeof(int), 1, fp);
+  printf("model has %d nodes and %d tensors\n", model->layer_count,
+         model->tensor_count);
+
+  // Read layers and tensors
+  for (int i = 0; i < model->layer_count; ++i) {
+    mt_layer *layer = (mt_layer *)malloc(sizeof(*layer));
+
+    // Read layer header
+    fread(&layer->kind, sizeof(int), 1, fp);
+    fread(&layer->id, sizeof(int), 1, fp);
+    int prev_count, next_count, input_count, output_count;
+    fread(&prev_count, sizeof(int), 1, fp);
+    fread(&layer->prev, sizeof(int), prev_count, fp);
+    fread(&next_count, sizeof(int), 1, fp);
+    fread(&layer->next, sizeof(int), next_count, fp);
+    fread(&input_count, sizeof(int), 1, fp);
+    fread(&layer->inputs, sizeof(int), input_count, fp);
+    fread(&output_count, sizeof(int), 1, fp);
+    fread(&layer->outputs, sizeof(int), output_count, fp);
+
+    if (layer->kind == MT_LAYER_AVG_POOL_2D) {
+      fread(&layer->data.avg_pool_2d.size, sizeof(int), 1, fp);
+      fread(&layer->data.avg_pool_2d.stride, sizeof(int), 1, fp);
+    } else if (layer->kind == MT_LAYER_CONV_2D) {
+      fread(&layer->data.conv_2d.stride, sizeof(int), 1, fp);
+      fread(&layer->data.conv_2d.pad, sizeof(int), 1, fp);
+      int w_idx                = layer->inputs[1];
+      layer->data.conv_2d.w_id = w_idx;
+      model->tensors[w_idx]    = mt_tensor_fread(fp);
+      int b_idx                = layer->inputs[2];
+      layer->data.conv_2d.b_id = b_idx;
+      model->tensors[b_idx]    = mt_tensor_fread(fp);
+    } else if (layer->kind == MT_LAYER_DENSE) {
+      int w_idx                = layer->inputs[1];
+      layer->data.conv_2d.w_id = w_idx;
+      model->tensors[w_idx]    = mt_tensor_fread(fp);
+      int b_idx                = layer->inputs[2];
+      layer->data.conv_2d.b_id = b_idx;
+      model->tensors[b_idx]    = mt_tensor_fread(fp);
+    } else if (layer->kind == MT_LAYER_MAX_POOL_2D) {
+      fread(&layer->data.max_pool_2d.size, sizeof(int), 1, fp);
+      fread(&layer->data.max_pool_2d.stride, sizeof(int), 1, fp);
+      fread(&layer->data.max_pool_2d.pad, sizeof(int), 1, fp);
+    } else if (layer->kind == MT_LAYER_FLATTEN) {
+      fread(&layer->data.flatten.axis, sizeof(int), 1, fp);
+    } else if (layer->kind == MT_LAYER_RELU) {
+      // nothing to read
+    } else if (layer->kind == MT_LAYER_LOCAL_RESPONSE_NORM) {
+      fread(&layer->data.local_response_norm.size, sizeof(int), 1, fp);
+      fread(&layer->data.local_response_norm.alpha, sizeof(mt_float), 1, fp);
+      fread(&layer->data.local_response_norm.beta, sizeof(mt_float), 1, fp);
+      fread(&layer->data.local_response_norm.bias, sizeof(mt_float), 1, fp);
+    } else {
+      if (layer->kind == MT_LAYER_UNKNOWN) {
+        printf("unknown layer detected, possibly because its existence was "
+               "detected but the details were not parsed\n");
+      } else {
+        printf("layer kind %d is not supported yet\n", layer->kind);
+      }
+      exit(1);
+    }
+
+    model->layers[i] = layer;
+  }
+
+  // free(fp);
+  return model;
+}
+
+void mt_model_free(mt_model *model) {
+  for (int i = 0; i < model->tensor_count; ++i) {
+    if (model->tensors[i] != NULL)
+      mt_tensor_free(model->tensors[i]);
+  }
+  for (int i = 0; i < model->layer_count; ++i)
+    free(model->layers[i]);
+  free(model);
+}
 
 #ifdef __cplusplus
 }

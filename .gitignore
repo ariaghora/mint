@@ -1,6 +1,10 @@
 *.jpg
 .DS_Store
 alexnet
+alexnet_mt
 *.dSYM
 vendors
 *.dat
+*.mt
+*.onnx
+.venv
