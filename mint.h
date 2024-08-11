@@ -193,38 +193,65 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
   int W_out = (W_in + 2 * pad - K_w) / stride + 1;
 
 #ifdef MT_USE_IM2ROW_CONV
-  int        row_size = C_in * K_h * K_w;
-  int        col_size = H_out * W_out;
-  mt_tensor *row_data = mt_tensor_alloc(MT_ARR_INT(row_size, col_size), 2);
-  mt__im2row(x, row_data->data, K_h, K_w, stride, pad);
+  // Create im2col matrix
+  int        im2col_rows = C_in * K_h * K_w;
+  int        im2col_cols = H_out * W_out;
+  mt_tensor *im2col = mt_tensor_alloc(MT_ARR_INT(im2col_rows, im2col_cols), 2);
 
-  mt_tensor *weight_matrix =
-      mt_tensor_alloc(MT_ARR_INT(C_out, C_in * K_h * K_w), 2);
-  // Rearrange weights to match row-major order
-  for (int c_out = 0; c_out < C_out; c_out++) {
-    for (int c_in = 0; c_in < C_in; c_in++) {
-      for (int kh = 0; kh < K_h; kh++) {
-        for (int kw = 0; kw < K_w; kw++) {
-          int w_idx = ((c_out * C_in + c_in) * K_h + kh) * K_w + kw;
-          int wm_idx =
-              c_out * (C_in * K_h * K_w) + (kh * K_w + kw) * C_in + c_in;
-          weight_matrix->data[wm_idx] = w->data[w_idx];
-        }
+  // Perform im2col operation
+  #ifdef MT_USE_OPENMP
+    #pragma omp parallel for collapse(2)
+  #endif
+  for (int i = 0; i < im2col_cols; i++) {
+    for (int j = 0; j < im2col_rows; j++) {
+      int w_out = i % W_out;
+      int h_out = (i / W_out) % H_out;
+      int c_in  = j / (K_h * K_w);
+      int k_h   = (j / K_w) % K_h;
+      int k_w   = j % K_w;
+
+      int h_in = h_out * stride + k_h - pad;
+      int w_in = w_out * stride + k_w - pad;
+
+      if (h_in >= 0 && h_in < H_in && w_in >= 0 && w_in < W_in) {
+        im2col->data[j * im2col_cols + i] =
+            x->data[c_in * H_in * W_in + h_in * W_in + w_in];
+      } else {
+        im2col->data[j * im2col_cols + i] = 0;
       }
     }
   }
-  mt_tensor *output = mt_matmul(weight_matrix, row_data);
-  mt_reshape_inplace(output, MT_ARR_INT(C_out, H_out, W_out), 3);
 
-  // Add bias
-  for (int c_out = 0; c_out < C_out; c_out++) {
-    for (int i = 0; i < H_out * W_out; i++) {
-      output->data[c_out * H_out * W_out + i] += b->data[c_out];
+  // Reshape weights
+  mt_tensor *reshaped_w =
+      mt_tensor_alloc(MT_ARR_INT(C_out, C_in * K_h * K_w), 2);
+  memcpy(reshaped_w->data, w->data,
+         C_out * C_in * K_h * K_w * sizeof(mt_float));
+
+  // Perform matrix multiplication
+  mt_tensor *output_2d = mt_matmul(reshaped_w, im2col);
+
+  // Reshape output and add bias
+  mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C_out, H_out, W_out), 3);
+  #ifdef MT_USE_OPENMP
+    #pragma omp parallel for collapse(3)
+  #endif
+  for (int c = 0; c < C_out; c++) {
+    for (int h = 0; h < H_out; h++) {
+      for (int w = 0; w < W_out; w++) {
+        int idx = c * H_out * W_out + h * W_out + w;
+        output->data[idx] =
+            output_2d->data[c * H_out * W_out + h * W_out + w] + b->data[c];
+      }
     }
   }
 
-  mt_tensor_free(row_data);
-  mt_tensor_free(weight_matrix);
+  // Free temporary tensors
+  mt_tensor_free(im2col);
+  mt_tensor_free(reshaped_w);
+  mt_tensor_free(output_2d);
+
+  return output;
 #else
   // Allocate output tensor
   mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C_out, H_out, W_out), 3);

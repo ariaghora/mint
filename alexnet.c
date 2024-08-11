@@ -1,14 +1,17 @@
 #include <assert.h>
 #include <stdio.h>
 
-#include <cblas.h>
-
 #define STB_IMAGE_IMPLEMENTATION
 #include "vendors/stb_image.h"
 
+#define MT_USE_OPENMP
+#include <omp.h>
+
 #define MT_USE_BLAS
+#include <cblas.h>
+
 #define MT_USE_STB_IMAGE
-// #define MT_USE_IM2ROW_CONV
+#define MT_USE_IM2ROW_CONV
 #include "mint.h"
 
 typedef struct Conv2d {
@@ -101,6 +104,7 @@ int main(void) {
   mt_tensor *h5 = conv2d_forward(conv_layers[4], h4);
   mt_relu_inplace(h5);
   mt_tensor *h5_pool = mt_adaptive_avg_pool_2d(h5, 6, 6);
+  mt_tensor_free(h4);
   mt_tensor_free(h5);
 
   // Flatten
@@ -113,6 +117,8 @@ int main(void) {
   mt_relu_inplace(fc2);
   mt_tensor *fc3 = dense_forward(dense_layers[2], fc2);
 
+  mt_tensor_free(h5_pool), mt_tensor_free(fc1), mt_tensor_free(fc2);
+
   //================= INFERENCE:END ==================
   int      arg_max = 0;
   mt_float cur_max = fc3->data[arg_max];
@@ -122,6 +128,8 @@ int main(void) {
       arg_max = i;
     }
   }
+  mt_tensor_free(fc3);
+
   printf("argmax=%d\n", arg_max);
   printf("score=%f\n", cur_max);
 
