@@ -2,7 +2,7 @@ from torchvision import models
 import torch
 
 if __name__ == "__main__":
-    model_path_in = "resnet18.onnx"
+    model_path_in = "resnet-18.onnx"
 
     # Load the pre-trained AlexNet model
     resnet = models.resnet18(pretrained=True)

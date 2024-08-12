@@ -1,8 +1,8 @@
-from collections import OrderedDict
+import os
+import sys
 from enum import Enum
 from io import BufferedWriter
-from typing import Any, Dict, List, OrderedDict
-from torchvision import models, os
+from typing import Any, Dict, List
 
 import numpy as np
 import onnx
@@ -195,6 +195,7 @@ def write_add(
     write_layer_header(f, LayerKind.ADD.value, node)
     print(f"wrote Add {id}")
 
+
 def write_avg_pool_2d(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
@@ -252,7 +253,7 @@ def write_dense(
     w_idx = node["inputs"][1]
     w = tensors[w_idx]
     if trans_b:
-        w = w.T.copy()
+        w = w.T
     write_ndarray(f, w)
 
     # write b
@@ -269,6 +270,7 @@ def write_flatten(
     np.array(node["attributes"]["axis"], dtype=np.int32).tofile(f)
     print(f"wrote Flatten {id}")
 
+
 def write_global_avg_pool(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
@@ -277,33 +279,13 @@ def write_global_avg_pool(
 
 
 if __name__ == "__main__":
-    model_path_in = "alexnet.onnx"
+    if len(sys.argv) != 2:
+        print("dump.py requires one argument, i.e., the ONNX model path")
+        exit(1)
+
+    model_path_in = sys.argv[1]
     model_path_out = model_path_in.replace(".onnx", ".mt")
 
-    # Load the pre-trained AlexNet model
-    alexnet = models.resnet18(pretrained=True)
-
-    # Set the model to evaluation mode
-    alexnet.eval()
-
-    # Create a dummy input tensor
-    dummy_input = torch.randn(1, 3, 224, 224)
-
-    # Export the model to ONNX
-    torch.onnx.export(
-        alexnet,  # model being run
-        dummy_input,  # model input (or a tuple for multiple inputs)
-        model_path_in,  # where to save the model
-        export_params=True,  # store the trained parameter weights inside the model file
-        opset_version=12,  # the ONNX version to export the model to
-        do_constant_folding=True,  # whether to execute constant folding for optimization
-        input_names=["input"],  # the model's input names
-        output_names=["output"],  # the model's output names
-        dynamic_axes={
-            "input": {0: "batch_size"},  # variable length axes
-            "output": {0: "batch_size"},
-        },
-    )
     model = parse_onnx(model_path_in)
 
     err = []

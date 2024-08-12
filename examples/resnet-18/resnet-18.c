@@ -1,18 +1,32 @@
 #include <stdio.h>
 #define STB_IMAGE_IMPLEMENTATION
-#include "vendors/stb_image.h"
+#include "../../vendors/stb_image.h"
 
 #define MT_USE_BLAS
 #include <cblas.h>
 
+// Comment line below to enable logging and assertion
+#define NDEBUG
+
 #define MT_USE_IM2COL_CONV
 #define MT_USE_STB_IMAGE
-#define NDEBUG
-#include "mint.h"
+#include "../../mint.h"
 
-int main(void) {
-    mt_model  *model = mt_model_load("alexnet.mt", 1);
-    mt_tensor *image = mt_tensor_load_image("./leopard.jpg");
+int main(int argc, char **argv) {
+    // clang-format off
+    char *class_labels[] = {
+        #include "class-list.inc"
+    };
+    // clang-format on
+
+    if (argc != 3) {
+        printf("This program requires 2 arguments: 1) the path to resnet.mt "
+               "and 2) the path image to predict");
+        exit(1);
+    }
+
+    mt_model  *model = mt_model_load(argv[1], 1);
+    mt_tensor *image = mt_tensor_load_image(argv[2]);
 
     float *mean = MT_ARR_FLOAT(0.485, 0.456, 0.406);
     float *std  = MT_ARR_FLOAT(0.229, 0.224, 0.225);
@@ -31,7 +45,7 @@ int main(void) {
             arg_max = i;
         }
     }
-    printf("class %d\n", arg_max);
+    printf("class label: %s\n", class_labels[arg_max]);
 
     mt_tensor_free(output);
     mt_tensor_free(image);

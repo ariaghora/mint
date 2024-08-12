@@ -8,3 +8,4 @@ vendors
 *.mt
 *.onnx
 .venv
+*.out
