@@ -80,10 +80,12 @@ typedef struct mt_model mt_model;
 
 typedef enum mt_layer_kind {
     MT_LAYER_UNKNOWN,
+    MT_LAYER_ADD,
     MT_LAYER_AVG_POOL_2D,
     MT_LAYER_CONV_2D,
     MT_LAYER_DENSE,
     MT_LAYER_FLATTEN,
+    MT_LAYER_GLOBAL_AVG_POOL,
     MT_LAYER_LOCAL_RESPONSE_NORM,
     MT_LAYER_MAX_POOL_2D,
     MT_LAYER_RELU,
@@ -94,10 +96,12 @@ typedef enum mt_layer_kind {
  * Ops API
  */
 mt_tensor *mt_adaptive_avg_pool_2d(mt_tensor *x, int out_h, int out_w);
+mt_tensor *mt_add(mt_tensor *a, mt_tensor *b);
 mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b);
 mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride, int pad);
 mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
                           int pad);
+mt_tensor *mt_global_avg_pool_2d(mt_tensor *x);
 void       mt_image_standardize(mt_tensor *t, mt_float *mu, mt_float *std);
 mt_tensor *mt_local_response_norm(mt_tensor *t, int size, mt_float alpha,
                                   mt_float beta, mt_float k);
@@ -160,11 +164,15 @@ typedef struct mt_tensor {
 typedef struct {
     int           id;
     mt_layer_kind kind;
+    // This member holds data of different layer types. Some layers do not have
+    // any data/attribute to store, such as ReLU, simple binary operations, etc.
+    // In that case, they are not listed here.
     union {
         // MT_LAYER_AVG_POOL_2D
         struct {
             int size;
             int stride;
+            int pad;
         } avg_pool_2d;
 
         // MT_LAYER_CONV_2D
@@ -321,6 +329,28 @@ mt_tensor *mt_adaptive_avg_pool_2d(mt_tensor *x, int out_h, int out_w) {
     }
 
     return output;
+}
+
+mt_tensor *mt_add(mt_tensor *a, mt_tensor *b) {
+    MT_ASSERT_F(a->ndim == b->ndim,
+                "cannot add tensors with different ndim (%d and %d)", a->ndim,
+                b->ndim);
+
+    int a_numel = mt_tensor_count_element(a);
+    int b_numel = mt_tensor_count_element(b);
+    MT_ASSERT_F(a_numel == b_numel,
+                "cannot add tensors with different length (%d and %d)", a_numel,
+                b_numel);
+
+    mt_tensor *res = mt_tensor_alloc(a->shape, a->ndim);
+
+#ifdef MT_USE_OPENMP
+    #pragma omp parallel for collapse(3)
+#endif
+    for (int i = 0; i < a_numel; ++i) {
+        res->data[i] = a->data[i] + b->data[i];
+    }
+    return res;
 }
 
 mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b) {
@@ -554,6 +584,32 @@ mt_tensor *mt__matmul_backend(mt_tensor *a, mt_tensor *b) {
     return c;
 }
 
+mt_tensor *mt_global_avg_pool_2d(mt_tensor *x) {
+    MT_ASSERT(x->ndim == 3, "Input tensor must be 3-dimensional");
+    int C = x->shape[0];
+    int H = x->shape[1];
+    int W = x->shape[2];
+
+    // Allocate output tensor of shape (C, 1, 1)
+    mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C, 1, 1), 3);
+
+// Perform global average pooling
+#ifdef MT_USE_OPENMP
+    #pragma omp parallel for
+#endif
+    for (int c = 0; c < C; c++) {
+        mt_float sum = 0.0f;
+        for (int h = 0; h < H; h++) {
+            for (int w = 0; w < W; w++) {
+                sum += x->data[c * H * W + h * W + w];
+            }
+        }
+        output->data[c] = sum / (H * W);
+    }
+
+    return output;
+}
+
 void mt_image_standardize(mt_tensor *t, mt_float *mu, mt_float *std) {
     MT_ASSERT(t->ndim == 3, "");
     int h = t->shape[1];
@@ -779,9 +835,12 @@ mt_model *mt_model_load(const char *filename, int input_in_batch) {
         fread(&layer->output_count, sizeof(int), 1, fp);
         fread(&layer->outputs, sizeof(int), layer->output_count, fp);
 
-        if (layer->kind == MT_LAYER_AVG_POOL_2D) {
+        if (layer->kind == MT_LAYER_ADD) {
+            // nothing to read
+        } else if (layer->kind == MT_LAYER_AVG_POOL_2D) {
             fread(&layer->data.avg_pool_2d.size, sizeof(int), 1, fp);
             fread(&layer->data.avg_pool_2d.stride, sizeof(int), 1, fp);
+            fread(&layer->data.avg_pool_2d.pad, sizeof(int), 1, fp);
         } else if (layer->kind == MT_LAYER_CONV_2D) {
             fread(&layer->data.conv_2d.stride, sizeof(int), 1, fp);
             fread(&layer->data.conv_2d.pad, sizeof(int), 1, fp);
@@ -813,6 +872,8 @@ mt_model *mt_model_load(const char *filename, int input_in_batch) {
                             layer->data.flatten.axis - 1);
                 layer->data.flatten.axis--;
             }
+        } else if (layer->kind == MT_LAYER_GLOBAL_AVG_POOL) {
+            // nothing to read
         } else if (layer->kind == MT_LAYER_RELU) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_LOCAL_RESPONSE_NORM) {
@@ -866,8 +927,19 @@ void mt_model_free(mt_model *model) {
     free(model);
 }
 
+int arr_int_contains(int *arr, int len, int to_find) {
+    for (int i = 0; i < len; ++i) {
+        if (to_find == arr[i])
+            return 1;
+    }
+    return 0;
+}
+
 void mt__toposort(mt_layer *l, mt_model *model, int *sorted_ids,
                   int *sorted_len) {
+    if (arr_int_contains(sorted_ids, *sorted_len, l->id))
+        return;
+
     for (int i = 0; i < l->prev_count; ++i) {
         mt_layer *l_child = model->layers[l->prev[i]];
         mt__toposort(l_child, model, sorted_ids, sorted_len);
@@ -881,11 +953,18 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
     DEBUG_LOG_F("executing layer id %d (type %d)", l->id, l->kind);
 
     switch (l->kind) {
+    case MT_LAYER_ADD: {
+        mt_tensor *a                  = model->tensors[l->inputs[0]];
+        mt_tensor *b                  = model->tensors[l->inputs[1]];
+        res                           = mt_add(a, b);
+        model->tensors[l->outputs[0]] = res;
+        break;
+    }
     case MT_LAYER_AVG_POOL_2D: {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res =
-            mt_avg_pool_2d(input, l->data.max_pool_2d.size,
-                           l->data.max_pool_2d.stride, l->data.max_pool_2d.pad);
+            mt_avg_pool_2d(input, l->data.avg_pool_2d.size,
+                           l->data.avg_pool_2d.stride, l->data.avg_pool_2d.pad);
         model->tensors[l->outputs[0]] = res;
         break;
     }
@@ -937,6 +1016,12 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         model->tensors[l->outputs[0]] = res;
         break;
     }
+    case MT_LAYER_GLOBAL_AVG_POOL: {
+        mt_tensor *input              = model->tensors[l->inputs[0]];
+        res                           = mt_global_avg_pool_2d(input);
+        model->tensors[l->outputs[0]] = res;
+        break;
+    }
     case MT_LAYER_MAX_POOL_2D: {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res =
@@ -948,6 +1033,7 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
     case MT_LAYER_RELU: {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
+        mt_relu_inplace(res);
         model->tensors[l->outputs[0]] = res;
         break;
     }
@@ -995,8 +1081,7 @@ void mt_model_run(mt_model *model) {
 
     // Execute forward
     for (int i = 0; i < *sorted_len_ptr; ++i) {
-        mt_layer *l         = model->layers[sorted_ids[i]];
-        int       output_id = l->outputs[0];
+        mt_layer *l = model->layers[sorted_ids[i]];
         mt__layer_forward(l, model);
     }
 

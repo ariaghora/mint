@@ -16,10 +16,12 @@ LayerKind = Enum(
     "LayerKind",
     [
         "UNKNOWN",
+        "ADD",
         "AVG_POOL_2D",
         "CONV_2D",
         "DENSE",
         "FLATTEN",
+        "GLOBAL_AVG_POOL",
         "LOCAL_RESPONSE_NORM",
         "MAX_POOL_2D",
         "RELU",
@@ -184,8 +186,14 @@ def write_max_pool(
     np.array(shape[0], dtype=np.int32).tofile(f)
     np.array(strides[0], dtype=np.int32).tofile(f)
     np.array(pads[0], dtype=np.int32).tofile(f)
-    print(f"MaxPool {id}")
+    print(f"wrote MaxPool {id}")
 
+
+def write_add(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.ADD.value, node)
+    print(f"wrote Add {id}")
 
 def write_avg_pool_2d(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
@@ -193,13 +201,17 @@ def write_avg_pool_2d(
     write_layer_header(f, LayerKind.AVG_POOL_2D.value, node)
     kernel_shape = node["attributes"]["kernel_shape"]
     strides = node["attributes"]["strides"]
+    pads = node["attributes"].get("pads", [0, 0, 0, 0])
     assert all(v == kernel_shape[0] for v in kernel_shape)
     assert all(v == strides[0] for v in strides)
+    assert all(v == pads[0] for v in pads)
     # size
     np.array(kernel_shape[0], dtype=np.int32).tofile(f)
     # stride
     np.array(strides[0], dtype=np.int32).tofile(f)
-    print(f"AveragePool {id}")
+    # pad
+    np.array(pads[0], dtype=np.int32).tofile(f)
+    print(f"wrote AveragePool {id}")
 
 
 def write_conv(
@@ -257,13 +269,19 @@ def write_flatten(
     np.array(node["attributes"]["axis"], dtype=np.int32).tofile(f)
     print(f"wrote Flatten {id}")
 
+def write_global_avg_pool(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.GLOBAL_AVG_POOL.value, node)
+    print(f"wrote GlobalAveragePool {id}")
+
 
 if __name__ == "__main__":
-    MODEL_PATH_IN = "alexnet.onnx"
-    MODEL_PATH_OUT = "alexnet.mt"
+    model_path_in = "alexnet.onnx"
+    model_path_out = model_path_in.replace(".onnx", ".mt")
 
     # Load the pre-trained AlexNet model
-    alexnet = models.alexnet(pretrained=True)
+    alexnet = models.resnet18(pretrained=True)
 
     # Set the model to evaluation mode
     alexnet.eval()
@@ -275,7 +293,7 @@ if __name__ == "__main__":
     torch.onnx.export(
         alexnet,  # model being run
         dummy_input,  # model input (or a tuple for multiple inputs)
-        MODEL_PATH_IN,  # where to save the model
+        model_path_in,  # where to save the model
         export_params=True,  # store the trained parameter weights inside the model file
         opset_version=12,  # the ONNX version to export the model to
         do_constant_folding=True,  # whether to execute constant folding for optimization
@@ -286,10 +304,10 @@ if __name__ == "__main__":
             "output": {0: "batch_size"},
         },
     )
-    model = parse_onnx(MODEL_PATH_IN)
+    model = parse_onnx(model_path_in)
 
     err = []
-    with open(MODEL_PATH_OUT, "wb") as f:
+    with open(model_path_out, "wb") as f:
         # Write model headers
         np.array(len(model["nodes"]), dtype=np.int32).tofile(f)
         np.array(len(model["tensors"]), dtype=np.int32).tofile(f)
@@ -297,6 +315,8 @@ if __name__ == "__main__":
         # Write node data
         for id, node in enumerate(model["nodes"]):
             match node["op_type"]:
+                case "Add":
+                    write_add(f, id, node, model["tensors"])
                 case "AveragePool":
                     write_avg_pool_2d(f, id, node, model["tensors"])
                 case "Conv":
@@ -305,6 +325,8 @@ if __name__ == "__main__":
                     write_flatten(f, id, node, model["tensors"])
                 case "Gemm":
                     write_dense(f, id, node, model["tensors"])
+                case "GlobalAveragePool":
+                    write_global_avg_pool(f, id, node, model["tensors"])
                 case "LRN":
                     write_lrn(f, id, node, model["tensors"])
                 case "MaxPool":
@@ -336,5 +358,5 @@ if __name__ == "__main__":
         print(f"following layer kinds were unable to be processed: {err}")
         to_keep = input("keep model? (Y/n) ").strip().lower() == "y"
         if not to_keep:
-            os.remove(MODEL_PATH_OUT)
+            os.remove(model_path_out)
             print("removed")

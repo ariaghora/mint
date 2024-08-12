@@ -7,11 +7,12 @@
 
 #define MT_USE_IM2COL_CONV
 #define MT_USE_STB_IMAGE
+#define NDEBUG
 #include "mint.h"
 
 int main(void) {
     mt_model  *model = mt_model_load("alexnet.mt", 1);
-    mt_tensor *image = mt_tensor_load_image("./car.jpg");
+    mt_tensor *image = mt_tensor_load_image("./leopard.jpg");
 
     float *mean = MT_ARR_FLOAT(0.485, 0.456, 0.406);
     float *std  = MT_ARR_FLOAT(0.229, 0.224, 0.225);
