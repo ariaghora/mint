@@ -8,6 +8,9 @@ import numpy as np
 import onnx
 import torch
 
+ACCEPTED_OPSET = 12
+MAX_INPUT_OUTPUT_NAME_LEN = 50
+
 # The ordering must be identical to that of `mint.h`
 LayerKind = Enum(
     "LayerKind",
@@ -34,9 +37,6 @@ def onnx_tensor_to_numpy(onnx_tensor):
     return onnx.numpy_helper.to_array(onnx_tensor)
 
 
-ACCEPTED_OPSET = 12
-
-
 def parse_onnx(filename: str) -> Dict[str, Any]:
     onnx_model = onnx.load_model(filename, load_external_data=True)
     curr_version = onnx_model.opset_import[0].version
@@ -48,7 +48,13 @@ def parse_onnx(filename: str) -> Dict[str, Any]:
         onnx_model = onnx.version_converter.convert_version(onnx_model, ACCEPTED_OPSET)
 
     # Initialize the custom structure
-    model_structure = {"tensors": [], "nodes": [], "edges": []}
+    model_structure = {
+        "tensors": [],
+        "nodes": [],
+        "edges": [],
+        "inputs": [],
+        "outputs": [],
+    }
 
     # Helper function to convert ONNX tensor to numpy array
     def onnx_tensor_to_numpy(onnx_tensor):
@@ -115,6 +121,12 @@ def parse_onnx(filename: str) -> Dict[str, Any]:
                 node_info["prev"].append(prev_node_id)
         for output_id in node_info["outputs"]:
             tensor_to_nodes[output_id].append(node_id)
+
+    # list model input and output (name, id) pairs
+    inputs = [(i.name, name_to_id[i.name]) for i in onnx_model.graph.input]
+    outputs = [(o.name, name_to_id[o.name]) for o in onnx_model.graph.output]
+    model_structure["inputs"] = inputs
+    model_structure["outputs"] = outputs
 
     return model_structure
 
@@ -228,7 +240,7 @@ def write_dense(
     w_idx = node["inputs"][1]
     w = tensors[w_idx]
     if trans_b:
-        w = w.T
+        w = w.T.copy()
     write_ndarray(f, w)
 
     # write b
@@ -247,7 +259,7 @@ def write_flatten(
 
 
 if __name__ == "__main__":
-    MODEL_PATH_IN = "alexnet.ONNX"
+    MODEL_PATH_IN = "alexnet.onnx"
     MODEL_PATH_OUT = "alexnet.mt"
 
     # Load the pre-trained AlexNet model
@@ -278,10 +290,11 @@ if __name__ == "__main__":
 
     err = []
     with open(MODEL_PATH_OUT, "wb") as f:
-        # Model header
+        # Write model headers
         np.array(len(model["nodes"]), dtype=np.int32).tofile(f)
         np.array(len(model["tensors"]), dtype=np.int32).tofile(f)
 
+        # Write node data
         for id, node in enumerate(model["nodes"]):
             match node["op_type"]:
                 case "AveragePool":
@@ -301,6 +314,24 @@ if __name__ == "__main__":
                 case _:
                     if not node["op_type"] in err:
                         err.append(node["op_type"])
+
+        # write input and output lens, and (name, id) info
+        input_len = len(model["inputs"])
+        np.array(input_len, dtype=np.int32).tofile(f)
+        for name, id in model["inputs"]:
+            np.frombuffer(
+                name.encode("utf-8").ljust(MAX_INPUT_OUTPUT_NAME_LEN, b"\0"), dtype="S1"
+            ).tofile(f)
+            np.array(id, dtype=np.int32).tofile(f)
+
+        output_len = len(model["outputs"])
+        np.array(output_len, dtype=np.int32).tofile(f)
+        for name, id in model["outputs"]:
+            np.frombuffer(
+                name.encode("utf-8").ljust(MAX_INPUT_OUTPUT_NAME_LEN, b"\0"), dtype="S1"
+            ).tofile(f)
+            np.array(id, dtype=np.int32).tofile(f)
+
     if err:
         print(f"following layer kinds were unable to be processed: {err}")
         to_keep = input("keep model? (Y/n) ").strip().lower() == "y"

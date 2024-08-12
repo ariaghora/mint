@@ -8,4 +8,4 @@ alexnet: alexnet.c mint.h
 
 .PHONY: alexnet_mt
 alexnet_mt: alexnet_mt.c mint.h
-	$(CC) -o alexnet_mt alexnet_mt.c $(CFLAGS)
+	$(CC) -o alexnet_mt alexnet_mt.c $(CFLAGS) -lblas
