@@ -420,6 +420,26 @@ typedef struct mt_model {
     } while (0)
 #endif
 
+#define ERROR(msg)                                                             \
+    do {                                                                       \
+        fprintf(stderr,                                                        \
+                "\x1b[31m"                                                     \
+                "[ERROR] %s: %s\n"                                             \
+                "\x1b[0m",                                                     \
+                msg, strerror(errno));                                         \
+        exit(1);                                                               \
+    } while (0)
+
+#define ERROR_F(fmt, ...)                                                      \
+    do {                                                                       \
+        fprintf(stderr,                                                        \
+                "\x1b[31m"                                                     \
+                "[ERROR] " fmt ": %s\n"                                        \
+                "\x1b[0m",                                                     \
+                __VA_ARGS__, strerror(errno));                                 \
+        exit(1);                                                               \
+    } while (0)
+
 int mt_tensor_count_element(mt_tensor *t) {
     int count = 1;
     for (int i = 0; i < t->ndim; i++) {
@@ -469,12 +489,33 @@ mt_tensor *mt_adaptive_avg_pool_2d(mt_tensor *x, int out_h, int out_w) {
     return output;
 }
 
+// Helper function to calculate the broadcasted shape
+void mt__calc_broadcast_shape(int *shape1, int ndim1, int *shape2, int ndim2,
+                              int *result_shape, int *result_ndim) {
+    *result_ndim = (ndim1 > ndim2) ? ndim1 : ndim2;
+
+    for (int i = 0; i < *result_ndim; i++) {
+        int dim1 =
+            (i < *result_ndim - ndim1) ? 1 : shape1[i - (*result_ndim - ndim1)];
+        int dim2 =
+            (i < *result_ndim - ndim2) ? 1 : shape2[i - (*result_ndim - ndim2)];
+
+        if (dim1 == dim2) {
+            result_shape[i] = dim1;
+        } else if (dim1 == 1 || dim2 == 1) {
+            result_shape[i] = (dim1 > dim2) ? dim1 : dim2;
+        } else {
+            fprintf(stderr, "Shapes are not compatible for broadcasting\n");
+            exit(1);
+        }
+    }
+}
+
 mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
                      mt_float f(mt_float, mt_float)) {
     MT_ASSERT_F(a->ndim == b->ndim,
                 "cannot add tensors with different ndim (%d and %d)", a->ndim,
                 b->ndim);
-
     int a_numel = mt_tensor_count_element(a);
     int b_numel = mt_tensor_count_element(b);
     MT_ASSERT_F(a_numel == b_numel,
