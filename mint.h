@@ -1,6 +1,32 @@
 /*
 
-                       Mint - A minimalist tensor library
+                                M I N T
+
+                       A minimalist tensor library
+
+
+
+****************************************************************************
+  CONCEPTS
+****************************************************************************
+
+  Tensor (mt_tensor)
+  --------------------------------------------------------------------------
+  A multi-dimensional matrix representation. The data type by default is set
+to C float, defined as `mt_float`. This can be overridden easily like this:
+
+  > #define mt_float YOUR_FLOAT
+  > #include "mint.h"
+  >
+  > // ...rest of your code
+
+
+  Model (mt_model)
+  --------------------------------------------------------------------------
+  Mint provides a functionality to load a pretrained model. Currently it can
+only load models converted from ONNX format. The script to convert ONNX into
+*.mt (Mint model format) is provided in `scripts` directory.
+
 
 ****************************************************************************
   COMPILE-TIME OPTIONS
@@ -38,11 +64,6 @@ including `mint.h`. You need to link your program with BLAS by adding -lblas
 compiler flag.
 
 
-  MT_USE_OPENMP
-  --------------------------------------------------------------------------
-  ...
-
-
   MT_USE_IM2COL_CONV
   --------------------------------------------------------------------------
   When enabled, mint will use im2col operation to convert the input data and
@@ -56,8 +77,7 @@ operation.
   Notes:
 1. It is recommended to enable this flag along with MT_USE_BLAS flag for the
    optimal result.
-2. Convolution by matrix multiplication with im2col requires more memory. It
-   is because
+2. Convolution by matrix multiplication with im2col requires more memory.
 
                                                                              */
 
@@ -71,7 +91,9 @@ extern "C" {
 #endif
 
 // The tensor values data type
-#define mt_float float
+#ifndef mt_float
+    #define mt_float float
+#endif
 
 // The tensor representation
 typedef struct mt_tensor mt_tensor;
@@ -331,7 +353,8 @@ mt_tensor *mt_adaptive_avg_pool_2d(mt_tensor *x, int out_h, int out_w) {
     return output;
 }
 
-mt_tensor *mt_add(mt_tensor *a, mt_tensor *b) {
+mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
+                     mt_float f(mt_float, mt_float)) {
     MT_ASSERT_F(a->ndim == b->ndim,
                 "cannot add tensors with different ndim (%d and %d)", a->ndim,
                 b->ndim);
@@ -344,13 +367,16 @@ mt_tensor *mt_add(mt_tensor *a, mt_tensor *b) {
 
     mt_tensor *res = mt_tensor_alloc(a->shape, a->ndim);
 
-#ifdef MT_USE_OPENMP
-    #pragma omp parallel for collapse(3)
-#endif
+#pragma omp parallel for collapse(3)
     for (int i = 0; i < a_numel; ++i) {
-        res->data[i] = a->data[i] + b->data[i];
+        res->data[i] = f(a->data[i], b->data[i]);
     }
     return res;
+}
+
+static mt_float mt__s_add(mt_float a, mt_float b) { return a + b; }
+mt_tensor      *mt_add(mt_tensor *a, mt_tensor *b) {
+    return mt__binop(a, b, mt__s_add);
 }
 
 mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b) {
@@ -387,9 +413,7 @@ mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride, int pad) {
     // Allocate output tensor
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C, H_out, W_out), 3);
 
-#ifdef MT_USE_OPENMP
-    #pragma omp parallel for collapse(3)
-#endif
+#pragma omp parallel for collapse(3)
     for (int c = 0; c < C; c++) {
         for (int h_out = 0; h_out < H_out; h_out++) {
             for (int w_out = 0; w_out < W_out; w_out++) {
@@ -447,10 +471,8 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
     mt_tensor *im2col =
         mt_tensor_alloc(MT_ARR_INT(im2col_rows, im2col_cols), 2);
 
+    #pragma omp parallel for collapse(2)
     // Perform im2col operation
-    #ifdef MT_USE_OPENMP
-        #pragma omp parallel for collapse(2)
-    #endif
     for (int i = 0; i < im2col_cols; i++) {
         for (int j = 0; j < im2col_rows; j++) {
             int w_out = i % W_out;
@@ -481,10 +503,8 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
     mt_tensor *output_2d = mt_matmul(reshaped_w, im2col);
 
     // Reshape output and add bias
-    mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C_out, H_out, W_out), 3);
-    #ifdef MT_USE_OPENMP
-        #pragma omp parallel for collapse(3)
-    #endif
+    mt_tensor  *output = mt_tensor_alloc(MT_ARR_INT(C_out, H_out, W_out), 3);
+    #pragma omp parallel for collapse(3)
     for (int c = 0; c < C_out; c++) {
         for (int h = 0; h < H_out; h++) {
             for (int w = 0; w < W_out; w++) {
@@ -505,9 +525,7 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
 #else
     // Allocate output tensor
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C_out, H_out, W_out), 3);
-    #ifdef MT_USE_OPENMP
-        #pragma omp parallel for
-    #endif
+    #pragma omp parallel for
     for (int c_out = 0; c_out < C_out; c_out++) {
         for (int h_out = 0; h_out < H_out; h_out++) {
             for (int w_out = 0; w_out < W_out; w_out++) {
@@ -567,9 +585,7 @@ mt_tensor *mt__matmul_backend(mt_tensor *a, mt_tensor *b) {
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, m, n, k, 1.0f,
                 a->data, k, b->data, n, 0.0f, c->data, n);
 #else
-    #ifdef USE_OPENMP
-        #pragma omp parallel for
-    #endif
+    #pragma omp parallel for
     for (int i = 0; i < m; i++) {
         for (int j = 0; j < n; j++) {
             float sum = 0.0f;
@@ -593,10 +609,8 @@ mt_tensor *mt_global_avg_pool_2d(mt_tensor *x) {
     // Allocate output tensor of shape (C, 1, 1)
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C, 1, 1), 3);
 
-// Perform global average pooling
-#ifdef MT_USE_OPENMP
-    #pragma omp parallel for
-#endif
+#pragma omp parallel for
+    // Perform global average pooling
     for (int c = 0; c < C; c++) {
         mt_float sum = 0.0f;
         for (int h = 0; h < H; h++) {
@@ -642,9 +656,7 @@ mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int pad) {
     // Allocate output tensor
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C, H_out, W_out), 3);
 
-#ifdef MT_USE_OPENMP
-    #pragma omp parallel for
-#endif
+#pragma omp parallel for
     for (int c = 0; c < C; c++) {
         for (int h_out = 0; h_out < H_out; h_out++) {
             for (int w_out = 0; w_out < W_out; w_out++) {
@@ -678,9 +690,7 @@ mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int pad) {
 
 void mt_relu_inplace(mt_tensor *t) {
     // in-place relu activation
-#ifdef USE_OPENMP
-    #pragma omp parallel for
-#endif
+#pragma omp parallel for
     for (int i = 0; i < mt_tensor_count_element(t); ++i) {
         t->data[i] = t->data[i] >= 0 ? t->data[i] : 0;
     }
