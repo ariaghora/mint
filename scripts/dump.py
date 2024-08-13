@@ -20,12 +20,16 @@ LayerKind = Enum(
         "AVG_POOL_2D",
         "CONV_2D",
         "DENSE",
+        "DIV",
+        "EXP",
         "FLATTEN",
         "GLOBAL_AVG_POOL",
         "LOCAL_RESPONSE_NORM",
         "MAX_POOL_2D",
+        "MUL",
         "RELU",
         "SIGMOID",
+        "SUB",
     ],
     start=0,
 )
@@ -196,6 +200,25 @@ def write_add(
     print(f"wrote Add {id}")
 
 
+def write_sub(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.SUB.value, node)
+    print(f"wrote Sub {id}")
+
+def write_mul(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.MUL.value, node)
+    print(f"wrote Mul {id}")
+
+def write_div(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.DIV.value, node)
+    print(f"wrote Div {id}")
+
+
 def write_avg_pool_2d(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
@@ -297,8 +320,16 @@ if __name__ == "__main__":
         # Write node data
         for id, node in enumerate(model["nodes"]):
             match node["op_type"]:
+                # Simple binop
                 case "Add":
                     write_add(f, id, node, model["tensors"])
+                case "Sub":
+                    write_sub(f, id, node, model["tensors"])
+                case "Mul":
+                    write_mul(f, id, node, model["tensors"])
+                case "Div":
+                    write_div(f, id, node, model["tensors"])
+
                 case "AveragePool":
                     write_avg_pool_2d(f, id, node, model["tensors"])
                 case "Conv":

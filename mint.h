@@ -261,12 +261,15 @@ typedef enum {
     MT_LAYER_AVG_POOL_2D,
     MT_LAYER_CONV_2D,
     MT_LAYER_DENSE,
+    MT_LAYER_DIV,
     MT_LAYER_FLATTEN,
     MT_LAYER_GLOBAL_AVG_POOL,
     MT_LAYER_LOCAL_RESPONSE_NORM,
     MT_LAYER_MAX_POOL_2D,
+    MT_LAYER_MUL,
     MT_LAYER_RELU,
     MT_LAYER_SIGMOID,
+    MT_LAYER_SUB,
 } mt_layer_kind;
 
 mt_model  *mt_model_load(const char *filename, int input_in_batch);
