@@ -6,13 +6,27 @@
 
 
   Mint is a single-file header only library for tensor manipulation. It also
-enables importing and executing (some) neural netwok models. Mint aims to be
+enables importing and executing *some* neural netwok models. Mint aims to be
 dependency-free and easily distributed, but it is possible to integrate with
 the other libraries such as BLAS if needed.
 
 
 ****************************************************************************
-  USAGE
+  TABLE OF CONTENTS                                                    MT001
+****************************************************************************
+
+    [MT001] Table of contents
+    [MT002] Usage
+    [MT003] Concepts
+    [MT004] Compile-time options
+    [MT005] Mint APIs
+    [MT006] Mint implementations
+
+    Tips: you can search faster within this file using the code MTXXX
+
+
+****************************************************************************
+  USAGE                                                                MT002
 ****************************************************************************
 
   Do this:
@@ -30,7 +44,7 @@ the other libraries such as BLAS if needed.
 
 
 ****************************************************************************
-  CONCEPTS
+  CONCEPTS                                                             MT003
 ****************************************************************************
 
   Tensor (mt_tensor)
@@ -48,11 +62,51 @@ to C float, defined as `mt_float`. This can be overridden easily like this:
   --------------------------------------------------------------------------
   Mint provides a functionality to load a pretrained model. Currently it can
 only load models converted from ONNX format. The script to convert ONNX into
-*.mt (Mint model format) is provided in `scripts` directory.
+*.mt (Mint model format) is provided in `scripts` directory. The mint format
+is specified as follows:
+
+         ┌──────────────────────────────────────────────────────────┐
+         │ MODEL HEADER                                             │
+         │┌────────────────────────────────────────────────────────┐│
+         ││ 4 bytes: Layer Count                                   ││
+         │├────────────────────────────────────────────────────────┤│
+         ││ 4 bytes: Tensor Count                                  ││
+         │└────────────────────────────────────────────────────────┘│
+         ├──────────────────────────────────────────────────────────┤
+         │ MODEL DATA                                               │
+         │┌────────────────────────────────────────────────────────┐│
+         ││ LAYER HEADER                                           ││
+         ││┌──────────────────────────────────────────────────────┐││
+         │││ 4 bytes: layer kind                                  │││
+         │││ 4 bytes: layer ID                                    │││
+         │││ 4 bytes: prev_count, count of dependencies           │││
+         │││ 4 * prev_count bytes: list of dependency IDs         │││
+         │││ 4 bytes: next_count, count of dependents             │││
+         │││ 4 * next_count bytes: list of dependent ID           │││
+         │││ 4 bytes: input_count, count of input tensors         │││
+         │││ 4 * input_count bytes: list of input tensor IDs      │││
+         │││ 4 bytes: output_count, count of output tensors       │││
+         │││ 4 * output_count bytes: list of output tensor IDs    │││
+         ││└──────────────────────────────────────────────────────┘││
+         │├────────────────────────────────────────────────────────┤│
+         ││ LAYER DATA                                             ││
+         ││            Content depends on layer kind               ││
+         │└────────────────────────────────────────────────────────┘│
+         │                          . . .                           │
+         │┌────────────────────────────────────────────────────────┐│
+         ││ LAYER HEADER                                           ││
+         │├────────────────────────────────────────────────────────┤│
+         ││ LAYER DATA                                             ││
+         │└────────────────────────────────────────────────────────┘│
+         ├──────────────────────────────────────────────────────────┤
+         │┌─────────────┐┌─────────────┐             ┌─────────────┐│
+         ││ TENSOR DATA ││ TENSOR DATA │    . . .    │ TENSOR DATA ││
+         │└─────────────┘└─────────────┘             └─────────────┘│
+         └──────────────────────────────────────────────────────────┘
 
 
 ****************************************************************************
-  COMPILE-TIME OPTIONS
+  COMPILE-TIME OPTIONS                                                 MT004
 ****************************************************************************
 
   All compile-time options should be placed before including `mint.h`.
@@ -118,28 +172,16 @@ extern "C" {
 #define mt_float float
 #endif
 
-// The tensor representation
-typedef struct mt_tensor mt_tensor;
-
-typedef struct mt_model mt_model;
-
-typedef enum mt_layer_kind {
-    MT_LAYER_UNKNOWN,
-    MT_LAYER_ADD,
-    MT_LAYER_AVG_POOL_2D,
-    MT_LAYER_CONV_2D,
-    MT_LAYER_DENSE,
-    MT_LAYER_FLATTEN,
-    MT_LAYER_GLOBAL_AVG_POOL,
-    MT_LAYER_LOCAL_RESPONSE_NORM,
-    MT_LAYER_MAX_POOL_2D,
-    MT_LAYER_RELU,
-    MT_LAYER_SIGMOID,
-} mt_layer_kind;
+/***************************************************************************
+  MINT APIs                                                            MT005
+ **************************************************************************/
 
 /*
- * Ops API
+ * Tensor operation API
  */
+
+typedef struct mt_tensor mt_tensor;
+
 mt_tensor *mt_adaptive_avg_pool_2d(mt_tensor *x, int out_h, int out_w);
 mt_tensor *mt_add(mt_tensor *a, mt_tensor *b);
 mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b);
@@ -155,7 +197,7 @@ mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int pad);
 void       mt_relu_inplace(mt_tensor *t);
 
 /*
- * Tensor API
+ * Tensor memory management API
  */
 mt_tensor *mt_tensor_alloc(int *shape, int ndim);
 mt_tensor *mt_tensor_alloc_fill(int *shape, int ndim, mt_float value);
@@ -171,17 +213,32 @@ void mt_tensor_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim);
 /*
  * Model API
  */
+
+typedef struct mt_model mt_model;
+
+typedef enum {
+    MT_LAYER_UNKNOWN,
+    MT_LAYER_ADD,
+    MT_LAYER_AVG_POOL_2D,
+    MT_LAYER_CONV_2D,
+    MT_LAYER_DENSE,
+    MT_LAYER_FLATTEN,
+    MT_LAYER_GLOBAL_AVG_POOL,
+    MT_LAYER_LOCAL_RESPONSE_NORM,
+    MT_LAYER_MAX_POOL_2D,
+    MT_LAYER_RELU,
+    MT_LAYER_SIGMOID,
+} mt_layer_kind;
+
 mt_model  *mt_model_load(const char *filename, int input_in_batch);
 void       mt_model_free(mt_model *model);
 mt_tensor *mt_model_get_output(mt_model *model, const char *name);
 void       mt_model_run(mt_model *model);
 void       mt_model_set_input(mt_model *model, const char *name, mt_tensor *t);
 
-/**
- *
- * IMPLEMENTATION
- *
- */
+/***************************************************************************
+  MINT IMPLEMENTATION                                                  MT006
+ **************************************************************************/
 
 #ifdef MT_IMPLEMENTATION
 
