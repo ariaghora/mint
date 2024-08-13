@@ -1,4 +1,5 @@
 // clang-format off
+#define MT_IMPLEMENTATION
 #include "../../mint.h"
 
 int main() {

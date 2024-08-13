@@ -5,6 +5,29 @@
                        A minimalist tensor library
 
 
+  Mint is a single-file header only library for tensor manipulation. It also
+enables importing and executing (some) neural netwok models. Mint aims to be
+dependency-free and easily distributed, but it is possible to integrate with
+the other libraries such as BLAS if needed.
+
+
+****************************************************************************
+  USAGE
+****************************************************************************
+
+  Do this:
+
+  > #define MT_IMPLEMENTATION
+
+  before you include this file in *one* C or C++ file. For example:
+
+  > #include ...
+  > #include ...
+  > #include ...
+  >
+  > #define MT_IMPLEMENTATION
+  > #include "mint.h"
+
 
 ****************************************************************************
   CONCEPTS
@@ -92,7 +115,7 @@ extern "C" {
 
 // The tensor values data type
 #ifndef mt_float
-    #define mt_float float
+#define mt_float float
 #endif
 
 // The tensor representation
@@ -159,7 +182,9 @@ void       mt_model_set_input(mt_model *model, const char *name, mt_tensor *t);
  * IMPLEMENTATION
  *
  */
-// #include <assert.h>
+
+#ifdef MT_IMPLEMENTATION
+
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -262,46 +287,46 @@ typedef struct mt_model {
 #define MT_ARR_FLOAT(...) ((mt_float[]){__VA_ARGS__})
 
 #ifdef NDEBUG
-    #define MT_ASSERT_F(condition, format, ...) ((void)0)
-    #define DEBUG_LOG_F(format, ...) ((void)0)
+#define MT_ASSERT_F(condition, format, ...) ((void)0)
+#define DEBUG_LOG_F(format, ...) ((void)0)
 #else
-    #define MT_ASSERT_F(condition, format, ...)                                \
-        do {                                                                   \
-            if (!(condition)) {                                                \
-                fprintf(stderr, "\x1b[31m");                                   \
-                fprintf(stderr, "Assertion failed [%s:%d]: %s\n", __FILE__,    \
-                        __LINE__, #condition);                                 \
-                fprintf(stderr, format, __VA_ARGS__);                          \
-                fprintf(stderr, "\n");                                         \
-                fprintf(stderr, "\x1b[0m");                                    \
-                abort();                                                       \
-            }                                                                  \
-        } while (0)
-
-    #define DEBUG_LOG_F(format, ...)                                           \
-        do {                                                                   \
-            fprintf(stderr, "\x1b[33m");                                       \
-            fprintf(stderr, "DEBUG [%s:%d]: ", __FILE__, __LINE__);            \
+#define MT_ASSERT_F(condition, format, ...)                                    \
+    do {                                                                       \
+        if (!(condition)) {                                                    \
+            fprintf(stderr, "\x1b[31m");                                       \
+            fprintf(stderr, "Assertion failed [%s:%d]: %s\n", __FILE__,        \
+                    __LINE__, #condition);                                     \
             fprintf(stderr, format, __VA_ARGS__);                              \
-            fprintf(stderr, "\x1b[0m\n");                                      \
-        } while (0)
+            fprintf(stderr, "\n");                                             \
+            fprintf(stderr, "\x1b[0m");                                        \
+            abort();                                                           \
+        }                                                                      \
+    } while (0)
+
+#define DEBUG_LOG_F(format, ...)                                               \
+    do {                                                                       \
+        fprintf(stderr, "\x1b[33m");                                           \
+        fprintf(stderr, "DEBUG [%s:%d]: ", __FILE__, __LINE__);                \
+        fprintf(stderr, format, __VA_ARGS__);                                  \
+        fprintf(stderr, "\x1b[0m\n");                                          \
+    } while (0)
 #endif
 
 #ifdef NDEBUG
-    #define MT_ASSERT(condition, msg) ((void)0)
+#define MT_ASSERT(condition, msg) ((void)0)
 #else
-    #define MT_ASSERT(condition, msg)                                          \
-        do {                                                                   \
-            if (!(condition)) {                                                \
-                fprintf(stderr, "\x1b[31m");                                   \
-                fprintf(stderr, "Assertion failed [%s:%d]: %s\n", __FILE__,    \
-                        __LINE__, #condition);                                 \
-                fprintf(stderr, msg);                                          \
-                fprintf(stderr, "\n");                                         \
-                fprintf(stderr, "\x1b[0m");                                    \
-                abort();                                                       \
-            }                                                                  \
-        } while (0)
+#define MT_ASSERT(condition, msg)                                              \
+    do {                                                                       \
+        if (!(condition)) {                                                    \
+            fprintf(stderr, "\x1b[31m");                                       \
+            fprintf(stderr, "Assertion failed [%s:%d]: %s\n", __FILE__,        \
+                    __LINE__, #condition);                                     \
+            fprintf(stderr, msg);                                              \
+            fprintf(stderr, "\n");                                             \
+            fprintf(stderr, "\x1b[0m");                                        \
+            abort();                                                           \
+        }                                                                      \
+    } while (0)
 #endif
 
 int mt_tensor_count_element(mt_tensor *t) {
@@ -471,7 +496,7 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
     mt_tensor *im2col =
         mt_tensor_alloc(MT_ARR_INT(im2col_rows, im2col_cols), 2);
 
-    #pragma omp parallel for collapse(2)
+#pragma omp parallel for collapse(2)
     // Perform im2col operation
     for (int i = 0; i < im2col_cols; i++) {
         for (int j = 0; j < im2col_rows; j++) {
@@ -503,8 +528,8 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
     mt_tensor *output_2d = mt_matmul(reshaped_w, im2col);
 
     // Reshape output and add bias
-    mt_tensor  *output = mt_tensor_alloc(MT_ARR_INT(C_out, H_out, W_out), 3);
-    #pragma omp parallel for collapse(3)
+    mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C_out, H_out, W_out), 3);
+#pragma omp parallel for collapse(3)
     for (int c = 0; c < C_out; c++) {
         for (int h = 0; h < H_out; h++) {
             for (int w = 0; w < W_out; w++) {
@@ -525,7 +550,7 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
 #else
     // Allocate output tensor
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C_out, H_out, W_out), 3);
-    #pragma omp parallel for
+#pragma omp parallel for
     for (int c_out = 0; c_out < C_out; c_out++) {
         for (int h_out = 0; h_out < H_out; h_out++) {
             for (int w_out = 0; w_out < W_out; w_out++) {
@@ -585,7 +610,7 @@ mt_tensor *mt__matmul_backend(mt_tensor *a, mt_tensor *b) {
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, m, n, k, 1.0f,
                 a->data, k, b->data, n, 0.0f, c->data, n);
 #else
-    #pragma omp parallel for
+#pragma omp parallel for
     for (int i = 0; i < m; i++) {
         for (int j = 0; j < n; j++) {
             float sum = 0.0f;
@@ -1111,6 +1136,7 @@ void mt_model_set_input(mt_model *model, const char *name, mt_tensor *t) {
     mt_tensor *t_copy = mt_tensor_alloc_values(t->shape, t->ndim, t->data);
     model->tensors[input_tensor_idx] = t_copy;
 }
+#endif // !__MT_IMPLEMENTATION
 
 #ifdef __cplusplus
 }

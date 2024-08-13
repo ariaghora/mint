@@ -10,6 +10,7 @@
 
 #define MT_USE_IM2COL_CONV
 #define MT_USE_STB_IMAGE
+#define MT_IMPLEMENTATION
 #include "../../mint.h"
 
 int main(int argc, char **argv) {
