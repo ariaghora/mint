@@ -23,6 +23,7 @@ int main() {
         printf("%f\n", t->data[i]);
     }
 
+    // There is also a helper function to print tensor summary
     mt_tensor_debug_info(t);
 
     // Don't forget to free accordingly.

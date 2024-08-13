@@ -188,13 +188,16 @@ mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b);
 mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride, int pad);
 mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
                           int pad);
+mt_tensor *mt_div(mt_tensor *a, mt_tensor *b);
 mt_tensor *mt_global_avg_pool_2d(mt_tensor *x);
 void       mt_image_standardize(mt_tensor *t, mt_float *mu, mt_float *std);
 mt_tensor *mt_local_response_norm(mt_tensor *t, int size, mt_float alpha,
                                   mt_float beta, mt_float k);
 mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b);
 mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int pad);
+mt_tensor *mt_mul(mt_tensor *a, mt_tensor *b);
 void       mt_relu_inplace(mt_tensor *t);
+mt_tensor *mt_sub(mt_tensor *a, mt_tensor *b);
 
 /*
  * Tensor memory management API
@@ -682,6 +685,11 @@ mt_tensor *mt__matmul_backend(mt_tensor *a, mt_tensor *b) {
     return c;
 }
 
+static mt_float mt__s_div(mt_float a, mt_float b) { return a / b; }
+mt_tensor      *mt_div(mt_tensor *a, mt_tensor *b) {
+    return mt__binop(a, b, mt__s_div);
+}
+
 mt_tensor *mt_global_avg_pool_2d(mt_tensor *x) {
     MT_ASSERT(x->ndim == 3, "Input tensor must be 3-dimensional");
     int C = x->shape[0];
@@ -770,12 +778,22 @@ mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int pad) {
     return output;
 }
 
+static mt_float mt__s_mul(mt_float a, mt_float b) { return a * b; }
+mt_tensor      *mt_mul(mt_tensor *a, mt_tensor *b) {
+    return mt__binop(a, b, mt__s_mul);
+}
+
 void mt_relu_inplace(mt_tensor *t) {
     // in-place relu activation
 #pragma omp parallel for
     for (int i = 0; i < mt_tensor_count_element(t); ++i) {
         t->data[i] = t->data[i] >= 0 ? t->data[i] : 0;
     }
+}
+
+static mt_float mt__s_sub(mt_float a, mt_float b) { return a - b; }
+mt_tensor      *mt_sub(mt_tensor *a, mt_tensor *b) {
+    return mt__binop(a, b, mt__s_sub);
 }
 
 void mt_tensor_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim) {
