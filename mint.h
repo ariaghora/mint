@@ -581,7 +581,7 @@ mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
     return result;
 }
 
-inline mt_float mt__s_add(mt_float a, mt_float b) { return a + b; }
+static mt_float mt__s_add(mt_float a, mt_float b) { return a + b; }
 mt_tensor      *mt_add(mt_tensor *a, mt_tensor *b) {
     return mt__binop(a, b, mt__s_add);
 }
@@ -807,7 +807,7 @@ mt_tensor *mt__matmul_backend(mt_tensor *a, mt_tensor *b) {
     return c;
 }
 
-inline mt_float mt__s_div(mt_float a, mt_float b) { return a / b; }
+static mt_float mt__s_div(mt_float a, mt_float b) { return a / b; }
 mt_tensor      *mt_div(mt_tensor *a, mt_tensor *b) {
     return mt__binop(a, b, mt__s_div);
 }
@@ -900,7 +900,7 @@ mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int pad) {
     return output;
 }
 
-inline mt_float mt__s_mul(mt_float a, mt_float b) { return a * b; }
+static mt_float mt__s_mul(mt_float a, mt_float b) { return a * b; }
 mt_tensor      *mt_mul(mt_tensor *a, mt_tensor *b) {
     return mt__binop(a, b, mt__s_mul);
 }
@@ -913,7 +913,7 @@ void        mt_relu_inplace(mt_tensor *t) {
     }
 }
 
-inline mt_float mt__s_sub(mt_float a, mt_float b) { return a - b; }
+static mt_float mt__s_sub(mt_float a, mt_float b) { return a - b; }
 mt_tensor      *mt_sub(mt_tensor *a, mt_tensor *b) {
     return mt__binop(a, b, mt__s_sub);
 }
