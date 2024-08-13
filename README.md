@@ -1,3 +1,7 @@
+> This library is super new, and I cannot guarantee long-term maintenance commitment. If you need something faster and highly optimized, you should use [ggml](https://github.com/ggerganov/ggml) or a similar alternative.
+
+---
+
 ```
                                 M I N T
 
@@ -12,7 +16,7 @@ the other libraries such as BLAS if needed.
   Some of notable features:
 - NumPy style broadcasting
 - BLAS backend (optional)
-- OpenMP acceleration when enabled
+- OpenMP acceleration (when linked)
 
 ```
 
