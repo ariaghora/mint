@@ -197,9 +197,9 @@ mt_tensor *mt_add(mt_tensor *a, mt_tensor *b);
 // dimension with length of matmul result's trailing dimension. The addition
 // operation will broadcast b along matmul(x, w)'s first dimension.
 mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b);
-// TODO
+// Average pooling
 mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride, int pad);
-// TODO
+// Convolution 2d
 mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
                           int pad);
 // Element-wise division
@@ -209,7 +209,7 @@ mt_tensor *mt_div(mt_tensor *a, mt_tensor *b);
 mt_tensor *mt_global_avg_pool_2d(mt_tensor *x);
 // Standardize tensor RGB image. Both mu and std must have 3 elements.
 void       mt_image_standardize(mt_tensor *t, mt_float *mu, mt_float *std);
-// TODO
+// Local response norm, as introduced in AlexNet paper
 mt_tensor *mt_local_response_norm(mt_tensor *t, int size, mt_float alpha,
                                   mt_float beta, mt_float k);
 // Matrix multiplication. Both a and b must have 2 dimensions.
