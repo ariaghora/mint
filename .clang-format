@@ -1,4 +1,4 @@
 BasedOnStyle: LLVM
 AlignConsecutiveAssignments: "Consecutive"
-AlignConsecutiveDeclarations:  "Consecutive"
+AlignConsecutiveDeclarations:  "AcrossComments"
 IndentWidth: 4

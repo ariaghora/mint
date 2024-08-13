@@ -182,35 +182,66 @@ extern "C" {
 
 typedef struct mt_tensor mt_tensor;
 
+// Adaptive version of average pooling. This typically allows the use of any
+// arbitrary input size to obtain consistent size for the intermediate layer
+// representation.
 mt_tensor *mt_adaptive_avg_pool_2d(mt_tensor *x, int out_h, int out_w);
+// Element-wise addition
 mt_tensor *mt_add(mt_tensor *a, mt_tensor *b);
+// Affine transformation, i.e., matmul(x, w) + b. Tensor b needs to have one
+// dimension with length of matmul result's trailing dimension. The addition
+// operation will broadcast b along matmul(x, w)'s first dimension.
 mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b);
+// TODO
 mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride, int pad);
+// TODO
 mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
                           int pad);
+// Element-wise division
 mt_tensor *mt_div(mt_tensor *a, mt_tensor *b);
+// Pooling by taking average of each channel, reducing each channel's matrix
+// into a single value, i.e., the mean.
 mt_tensor *mt_global_avg_pool_2d(mt_tensor *x);
+// Standardize tensor RGB image. Both mu and std must have 3 elements.
 void       mt_image_standardize(mt_tensor *t, mt_float *mu, mt_float *std);
+// TODO
 mt_tensor *mt_local_response_norm(mt_tensor *t, int size, mt_float alpha,
                                   mt_float beta, mt_float k);
+// Matrix multiplication. Both a and b must have 2 dimensions.
 mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b);
+// Max-pooling
 mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int pad);
+// Element-wise multiplication
 mt_tensor *mt_mul(mt_tensor *a, mt_tensor *b);
+// Relu activation function, in-place version.
 void       mt_relu_inplace(mt_tensor *t);
+// Element-wise subtraction
 mt_tensor *mt_sub(mt_tensor *a, mt_tensor *b);
 
 /*
  * Tensor memory management API
  */
+// Allocate tensor without value initialization
 mt_tensor *mt_tensor_alloc(int *shape, int ndim);
+// Allocate tensor and fill the data with a consant value
 mt_tensor *mt_tensor_alloc_fill(int *shape, int ndim, mt_float value);
+// Allocate tensor and fill the data with a specified array of values
 mt_tensor *mt_tensor_alloc_values(int *shape, int ndim, mt_float *values);
+// Allocate tensor and fill the data with random values, ranging from 0 to 1
 mt_tensor *mt_tensor_alloc_random(int *shape, int ndim);
+// Get the number of elements of a tensor
 int        mt_tensor_count_element(mt_tensor *t);
+// Helper function to print tensor summary
 void       mt_tensor_debug_info(mt_tensor *t);
+// Helper function to read tensor from a file pointer. The file need to obey
+// a certain format.
 mt_tensor *mt_tensor_fread(FILE *fp);
+// Free tensor
 void       mt_tensor_free(mt_tensor *t);
+// Load image as a tensor with shape of CxHxW. C is the number of channel, H
+// is the image height, and W is the image width.
 mt_tensor *mt_tensor_load_image(char *filename);
+// Reshape tensor in-place. The old and new shape should be compatible.
 void mt_tensor_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim);
 
 /*
@@ -783,7 +814,7 @@ mt_tensor      *mt_mul(mt_tensor *a, mt_tensor *b) {
     return mt__binop(a, b, mt__s_mul);
 }
 
-void mt_relu_inplace(mt_tensor *t) {
+void        mt_relu_inplace(mt_tensor *t) {
     // in-place relu activation
 #pragma omp parallel for
     for (int i = 0; i < mt_tensor_count_element(t); ++i) {
