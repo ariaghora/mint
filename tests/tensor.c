@@ -75,10 +75,20 @@ void test_binop(Stats *stats) {
     a = mt_tensor_alloc_values(MT_ARR_INT(2, 2), 2, MT_ARR_FLOAT(1, 2, 3, 4));
     b = mt_tensor_alloc_values(MT_ARR_INT(2), 1, MT_ARR_FLOAT(1, 2));
     res_add = mt_add(a, b);
+    res_mul = mt_mul(a, b);
+    MT_ASSERT_TEST("add ndim", res_add->ndim == 2);
     MT_ASSERT_TEST("add shape",
                    MT_ARR_SAME(res_add->shape, MT_ARR_INT(2, 2), 2));
     MT_ASSERT_TEST("add data",
                    MT_ARR_SAME(res_add->data, MT_ARR_FLOAT(2, 4, 4, 6), 4));
+    MT_ASSERT_TEST("mul ndim", res_mul->ndim == 2);
+    MT_ASSERT_TEST("mul shape",
+                   MT_ARR_SAME(res_mul->shape, MT_ARR_INT(2, 2), 2));
+    MT_ASSERT_TEST("mul data",
+                   MT_ARR_SAME(res_mul->data, MT_ARR_FLOAT(1, 4, 3, 8), 4));
+    MT_TENSOR_BULK_FREE(4, a, b, res_add, res_mul);
+
+    // If both above pass, we assume other simple operator will also pass
 }
 
 int main() {

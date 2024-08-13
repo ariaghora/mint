@@ -6,9 +6,14 @@
 
 
   Mint is a single-file header only library for tensor manipulation. It also
-enables importing and executing *some* neural netwok models. Mint aims to be
+enables importing and executing *some* of neural net models. Mint aims to be
 dependency-free and easily distributed, but it is possible to integrate with
 the other libraries such as BLAS if needed.
+
+  Some of notable features:
+- NumPy style broadcasting
+- BLAS backend (optional)
+- OpenMP acceleration (optional)
 
 
 ****************************************************************************
@@ -511,24 +516,69 @@ void mt__calc_broadcast_shape(int *shape1, int ndim1, int *shape2, int ndim2,
     }
 }
 
+static void mt__calc_strides(int *shape, int ndim, int *strides) {
+    strides[ndim - 1] = 1;
+    for (int i = ndim - 2; i >= 0; i--) {
+        strides[i] = strides[i + 1] * shape[i + 1];
+    }
+}
+
+// General binary operator.
+// NOTE (Aria): This is meant to be used internally.
 mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
                      mt_float f(mt_float, mt_float)) {
-    MT_ASSERT_F(a->ndim == b->ndim,
-                "cannot add tensors with different ndim (%d and %d)", a->ndim,
-                b->ndim);
-    int a_numel = mt_tensor_count_element(a);
-    int b_numel = mt_tensor_count_element(b);
-    MT_ASSERT_F(a_numel == b_numel,
-                "cannot add tensors with different length (%d and %d)", a_numel,
-                b_numel);
+    int result_shape[MAX_TENSOR_NDIM];
+    int result_ndim;
+    mt__calc_broadcast_shape(a->shape, a->ndim, b->shape, b->ndim, result_shape,
+                             &result_ndim);
 
-    mt_tensor *res = mt_tensor_alloc(a->shape, a->ndim);
+    mt_tensor *result = mt_tensor_alloc(result_shape, result_ndim);
 
-#pragma omp parallel for collapse(3)
-    for (int i = 0; i < a_numel; ++i) {
-        res->data[i] = f(a->data[i], b->data[i]);
+    int a_strides[MAX_TENSOR_NDIM], b_strides[MAX_TENSOR_NDIM],
+        result_strides[MAX_TENSOR_NDIM];
+
+    mt__calc_strides(a->shape, a->ndim, a_strides);
+    mt__calc_strides(b->shape, b->ndim, b_strides);
+    mt__calc_strides(result_shape, result_ndim, result_strides);
+
+    int a_broadcast_shape[MAX_TENSOR_NDIM], b_broadcast_shape[MAX_TENSOR_NDIM];
+    for (int i = 0; i < result_ndim; i++) {
+        a_broadcast_shape[i] = (i < result_ndim - a->ndim)
+                                   ? 1
+                                   : a->shape[i - (result_ndim - a->ndim)];
+        b_broadcast_shape[i] = (i < result_ndim - b->ndim)
+                                   ? 1
+                                   : b->shape[i - (result_ndim - b->ndim)];
     }
-    return res;
+
+    int numel = mt_tensor_count_element(result);
+
+#pragma omp parallel for
+    // TODO: optimize for special ndims, identic shape, and tensor-scalar ops
+    for (int i = 0; i < numel; i++) {
+        int indices[MAX_TENSOR_NDIM];
+        int temp = i;
+        for (int j = 0; j < result_ndim; j++) {
+            indices[j] = temp / result_strides[j];
+            temp %= result_strides[j];
+        }
+
+        int a_index = 0, b_index = 0;
+        for (int j = 0; j < result_ndim; j++) {
+            a_index += (indices[j] % a_broadcast_shape[j]) *
+                       (j < result_ndim - a->ndim
+                            ? 0
+                            : a_strides[j - (result_ndim - a->ndim)]);
+            b_index += (indices[j] % b_broadcast_shape[j]) *
+                       (j < result_ndim - b->ndim
+                            ? 0
+                            : b_strides[j - (result_ndim - b->ndim)]);
+        }
+
+        result->data[i] = f(a->data[a_index], b->data[b_index]);
+    }
+
+    return result;
 }
 
 static mt_float mt__s_add(mt_float a, mt_float b) { return a + b; }
