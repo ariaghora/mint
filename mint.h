@@ -302,6 +302,8 @@ void       mt_model_set_input(mt_model *model, const char *name, mt_tensor *t);
 #define MAX_INPUT_OUTPUT_COUNT 5
 #define MAX_INPUT_OUTPUT_NAME_LEN 50
 
+#define MATMUL_BLOCK_SIZE 64
+
 typedef struct mt_tensor {
     mt_float *data;
 
@@ -870,13 +872,26 @@ mt_tensor *mt__matmul_backend(mt_tensor *a, mt_tensor *b) {
                 a->data, k, b->data, n, 0.0f, c->data, n);
 #else
 #pragma omp parallel for
-    for (int i = 0; i < m; i++) {
-        for (int j = 0; j < n; j++) {
-            float sum = 0.0f;
-            for (int p = 0; p < k; p++) {
-                sum += a->data[i * k + p] * b->data[p * n + j];
+    // Blocked matrix multiplication
+    for (int i0 = 0; i0 < m; i0 += MATMUL_BLOCK_SIZE) {
+        for (int j0 = 0; j0 < n; j0 += MATMUL_BLOCK_SIZE) {
+            for (int k0 = 0; k0 < k; k0 += MATMUL_BLOCK_SIZE) {
+                int max_i =
+                    (i0 + MATMUL_BLOCK_SIZE < m) ? i0 + MATMUL_BLOCK_SIZE : m;
+                int max_j =
+                    (j0 + MATMUL_BLOCK_SIZE < n) ? j0 + MATMUL_BLOCK_SIZE : n;
+                int max_k =
+                    (k0 + MATMUL_BLOCK_SIZE < k) ? k0 + MATMUL_BLOCK_SIZE : k;
+
+                for (int i = i0; i < max_i; i++) {
+                    for (int k = k0; k < max_k; k++) {
+                        float a_ik = a->data[i * tda + k];
+                        for (int j = j0; j < max_j; j++) {
+                            c->data[i * n + j] += a_ik * b->data[k * n + j];
+                        }
+                    }
+                }
             }
-            c->data[i * n + j] = sum;
         }
     }
 #endif
