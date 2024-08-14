@@ -207,6 +207,8 @@ mt_tensor *mt_div(mt_tensor *a, mt_tensor *b);
 // Pooling by taking average of each channel, reducing each channel's matrix
 // into a single value, i.e., the mean.
 mt_tensor *mt_global_avg_pool_2d(mt_tensor *x);
+// Resize image to a certain target using bilinear interpolation
+mt_tensor *mt_image_resize(mt_tensor *t, int target_height, int target_width);
 // Standardize tensor RGB image. Both mu and std must have 3 elements.
 void       mt_image_standardize(mt_tensor *t, mt_float *mu, mt_float *std);
 // Local response norm, as introduced in AlexNet paper
@@ -262,6 +264,7 @@ typedef enum {
     MT_LAYER_CONV_2D,
     MT_LAYER_DENSE,
     MT_LAYER_DIV,
+    MT_LAYER_EXP,
     MT_LAYER_FLATTEN,
     MT_LAYER_GLOBAL_AVG_POOL,
     MT_LAYER_LOCAL_RESPONSE_NORM,
@@ -310,9 +313,9 @@ typedef struct mt_tensor {
 typedef struct {
     int           id;
     mt_layer_kind kind;
-    // This member holds data of different layer types. Some layers do not have
-    // any data/attribute to store, such as ReLU, simple binary operations, etc.
-    // In that case, they are not listed here.
+    // This member holds data of different layer types. Some layers do not
+    // have any data/attribute to store, such as ReLU, simple binary
+    // operations, etc. In that case, they are not listed here.
     union {
         // MT_LAYER_AVG_POOL_2D
         struct {
@@ -557,7 +560,8 @@ mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
     int numel = mt_tensor_count_element(result);
 
 #pragma omp parallel for
-    // TODO: optimize for special ndims, identic shape, and tensor-scalar ops
+    // TODO: optimize for special ndims, identic shape, and tensor-scalar
+    // ops
     for (int i = 0; i < numel; i++) {
         int indices[MAX_TENSOR_NDIM];
         int temp = i;
@@ -839,6 +843,82 @@ mt_tensor *mt_global_avg_pool_2d(mt_tensor *x) {
     return output;
 }
 
+mt_tensor *mt_image_resize(mt_tensor *img, int target_height,
+                           int target_width) {
+    MT_ASSERT(img->ndim == 3,
+              "Input tensor must be 3-dimensional (CHW format)");
+
+    int channels   = img->shape[0];
+    int src_height = img->shape[1];
+    int src_width  = img->shape[2];
+
+    mt_tensor *resized =
+        mt_tensor_alloc(MT_ARR_INT(channels, target_height, target_width), 3);
+
+    float height_scale = (float)src_height / target_height;
+    float width_scale  = (float)src_width / target_width;
+
+    // Pre-compute source y coordinates and their weights
+    float *src_y  = (float *)malloc(target_height * sizeof(float));
+    int   *src_y0 = (int *)malloc(target_height * sizeof(int));
+    float *dy     = (float *)malloc(target_height * sizeof(float));
+
+    for (int y = 0; y < target_height; y++) {
+        src_y[y]  = y * height_scale;
+        src_y0[y] = (int)src_y[y];
+        dy[y]     = src_y[y] - src_y0[y];
+    }
+
+    // Pre-compute source x coordinates and their weights
+    float *src_x  = (float *)malloc(target_width * sizeof(float));
+    int   *src_x0 = (int *)malloc(target_width * sizeof(int));
+    float *dx     = (float *)malloc(target_width * sizeof(float));
+
+    for (int x = 0; x < target_width; x++) {
+        src_x[x]  = x * width_scale;
+        src_x0[x] = (int)src_x[x];
+        dx[x]     = src_x[x] - src_x0[x];
+    }
+
+    // Main resizing loop
+    for (int c = 0; c < channels; c++) {
+        mt_float *src_channel = img->data + c * src_height * src_width;
+        mt_float *dst_channel =
+            resized->data + c * target_height * target_width;
+
+        for (int y = 0; y < target_height; y++) {
+            int   y0        = src_y0[y];
+            int   y1        = (y0 < src_height - 1) ? y0 + 1 : y0;
+            float weight_y0 = 1 - dy[y];
+            float weight_y1 = dy[y];
+
+            for (int x = 0; x < target_width; x++) {
+                int   x0        = src_x0[x];
+                int   x1        = (x0 < src_width - 1) ? x0 + 1 : x0;
+                float weight_x0 = 1 - dx[x];
+                float weight_x1 = dx[x];
+
+                float val =
+                    weight_y0 * (weight_x0 * src_channel[y0 * src_width + x0] +
+                                 weight_x1 * src_channel[y0 * src_width + x1]) +
+                    weight_y1 * (weight_x0 * src_channel[y1 * src_width + x0] +
+                                 weight_x1 * src_channel[y1 * src_width + x1]);
+
+                dst_channel[y * target_width + x] = val;
+            }
+        }
+    }
+
+    free(src_y);
+    free(src_y0);
+    free(dy);
+    free(src_x);
+    free(src_x0);
+    free(dx);
+
+    return resized;
+}
+
 void mt_image_standardize(mt_tensor *t, mt_float *mu, mt_float *std) {
     MT_ASSERT(t->ndim == 3, "");
     int h = t->shape[1];
@@ -1043,14 +1123,50 @@ mt_tensor *mt_tensor_load_image(char *filename) {
 }
 #endif
 
-mt_model *mt_model_load(const char *filename, int input_in_batch) {
-    FILE *fp = fopen(filename, "rb");
-    MT_ASSERT_F(fp != NULL, "failed to open %s", filename);
+typedef struct {
+    char  *data;
+    size_t pos;
+    size_t size;
+} mt_reader;
+
+size_t mt_reader_read(void *ptr, size_t size, size_t count, mt_reader *stream) {
+    size_t total = size * count;
+    if (stream->pos + total > stream->size) {
+        total = stream->size - stream->pos;
+    }
+    memcpy(ptr, stream->data + stream->pos, total);
+    stream->pos += total;
+    return total / size;
+}
+
+mt_tensor *mt_tensor_memread(mt_reader *mp) {
+    int *ndim = (int *)calloc(1, sizeof(int));
+    mt_reader_read(ndim, sizeof(int), 1, mp);
+
+    int *shape = (int *)calloc(*ndim, sizeof(int));
+    mt_reader_read(shape, sizeof(int), *ndim, mp);
+
+    int tensor_numel = 1;
+    for (int i = 0; i < *ndim; i++)
+        tensor_numel *= shape[i];
+    mt_float *values = (mt_float *)calloc(tensor_numel, sizeof(mt_float));
+    mt_reader_read(values, sizeof(mt_float), tensor_numel, mp);
+
+    mt_tensor *t = mt_tensor_alloc_values(shape, *ndim, values);
+
+    free(ndim), free(shape), free(values);
+    return t;
+}
+
+mt_model *mt_model_load_from_mem(char *model_bytes, long len,
+                                 int input_in_batch) {
+
+    mt_reader mp    = (mt_reader){model_bytes, 0, len};
     mt_model *model = (mt_model *)malloc(sizeof(*model));
 
     // First, we read model header.
-    fread(&model->layer_count, sizeof(int), 1, fp);
-    fread(&model->tensor_count, sizeof(int), 1, fp);
+    mt_reader_read(&model->layer_count, sizeof(int), 1, &mp);
+    mt_reader_read(&model->tensor_count, sizeof(int), 1, &mp);
     DEBUG_LOG_F("model has %d nodes and %d tensors", model->layer_count,
                 model->tensor_count);
 
@@ -1059,49 +1175,51 @@ mt_model *mt_model_load(const char *filename, int input_in_batch) {
         mt_layer *layer = (mt_layer *)malloc(sizeof(*layer));
 
         // Read layer header
-        fread(&layer->kind, sizeof(int), 1, fp);
-        fread(&layer->id, sizeof(int), 1, fp);
-        fread(&layer->prev_count, sizeof(int), 1, fp);
-        fread(&layer->prev, sizeof(int), layer->prev_count, fp);
-        fread(&layer->next_count, sizeof(int), 1, fp);
-        fread(&layer->next, sizeof(int), layer->next_count, fp);
-        fread(&layer->input_count, sizeof(int), 1, fp);
-        fread(&layer->inputs, sizeof(int), layer->input_count, fp);
-        fread(&layer->output_count, sizeof(int), 1, fp);
-        fread(&layer->outputs, sizeof(int), layer->output_count, fp);
+        mt_reader_read(&layer->kind, sizeof(int), 1, &mp);
+        mt_reader_read(&layer->id, sizeof(int), 1, &mp);
+        mt_reader_read(&layer->prev_count, sizeof(int), 1, &mp);
+        mt_reader_read(&layer->prev, sizeof(int), layer->prev_count, &mp);
+        mt_reader_read(&layer->next_count, sizeof(int), 1, &mp);
+        mt_reader_read(&layer->next, sizeof(int), layer->next_count, &mp);
+        mt_reader_read(&layer->input_count, sizeof(int), 1, &mp);
+        mt_reader_read(&layer->inputs, sizeof(int), layer->input_count, &mp);
+        mt_reader_read(&layer->output_count, sizeof(int), 1, &mp);
+        mt_reader_read(&layer->outputs, sizeof(int), layer->output_count, &mp);
 
         if (layer->kind == MT_LAYER_ADD) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_AVG_POOL_2D) {
-            fread(&layer->data.avg_pool_2d.size, sizeof(int), 1, fp);
-            fread(&layer->data.avg_pool_2d.stride, sizeof(int), 1, fp);
-            fread(&layer->data.avg_pool_2d.pad, sizeof(int), 1, fp);
+            mt_reader_read(&layer->data.avg_pool_2d.size, sizeof(int), 1, &mp);
+            mt_reader_read(&layer->data.avg_pool_2d.stride, sizeof(int), 1,
+                           &mp);
+            mt_reader_read(&layer->data.avg_pool_2d.pad, sizeof(int), 1, &mp);
         } else if (layer->kind == MT_LAYER_CONV_2D) {
-            fread(&layer->data.conv_2d.stride, sizeof(int), 1, fp);
-            fread(&layer->data.conv_2d.pad, sizeof(int), 1, fp);
+            mt_reader_read(&layer->data.conv_2d.stride, sizeof(int), 1, &mp);
+            mt_reader_read(&layer->data.conv_2d.pad, sizeof(int), 1, &mp);
             int w_idx                = layer->inputs[1];
             layer->data.conv_2d.w_id = w_idx;
-            model->tensors[w_idx]    = mt_tensor_fread(fp);
+            model->tensors[w_idx]    = mt_tensor_memread(&mp);
             int b_idx                = layer->inputs[2];
             layer->data.conv_2d.b_id = b_idx;
-            model->tensors[b_idx]    = mt_tensor_fread(fp);
+            model->tensors[b_idx]    = mt_tensor_memread(&mp);
         } else if (layer->kind == MT_LAYER_DENSE) {
             int w_idx                = layer->inputs[1];
             layer->data.conv_2d.w_id = w_idx;
-            model->tensors[w_idx]    = mt_tensor_fread(fp);
+            model->tensors[w_idx]    = mt_tensor_memread(&mp);
             int b_idx                = layer->inputs[2];
             layer->data.conv_2d.b_id = b_idx;
-            model->tensors[b_idx]    = mt_tensor_fread(fp);
+            model->tensors[b_idx]    = mt_tensor_memread(&mp);
         } else if (layer->kind == MT_LAYER_MAX_POOL_2D) {
-            fread(&layer->data.max_pool_2d.size, sizeof(int), 1, fp);
-            fread(&layer->data.max_pool_2d.stride, sizeof(int), 1, fp);
-            fread(&layer->data.max_pool_2d.pad, sizeof(int), 1, fp);
+            mt_reader_read(&layer->data.max_pool_2d.size, sizeof(int), 1, &mp);
+            mt_reader_read(&layer->data.max_pool_2d.stride, sizeof(int), 1,
+                           &mp);
+            mt_reader_read(&layer->data.max_pool_2d.pad, sizeof(int), 1, &mp);
         } else if (layer->kind == MT_LAYER_FLATTEN) {
-            fread(&layer->data.flatten.axis, sizeof(int), 1, fp);
+            mt_reader_read(&layer->data.flatten.axis, sizeof(int), 1, &mp);
 
             // if model input is in batch, axis should be decreased by one
             if (input_in_batch) {
-                DEBUG_LOG_F("Input is in batch but only a single sample is "
+                DEBUG_LOG_F("Input is in batch but only a single sa&mple is "
                             "considered. Changing axis %d to %d",
                             layer->data.flatten.axis,
                             layer->data.flatten.axis - 1);
@@ -1112,16 +1230,18 @@ mt_model *mt_model_load(const char *filename, int input_in_batch) {
         } else if (layer->kind == MT_LAYER_RELU) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_LOCAL_RESPONSE_NORM) {
-            fread(&layer->data.local_response_norm.size, sizeof(int), 1, fp);
-            fread(&layer->data.local_response_norm.alpha, sizeof(mt_float), 1,
-                  fp);
-            fread(&layer->data.local_response_norm.beta, sizeof(mt_float), 1,
-                  fp);
-            fread(&layer->data.local_response_norm.bias, sizeof(mt_float), 1,
-                  fp);
+            mt_reader_read(&layer->data.local_response_norm.size, sizeof(int),
+                           1, &mp);
+            mt_reader_read(&layer->data.local_response_norm.alpha,
+                           sizeof(mt_float), 1, &mp);
+            mt_reader_read(&layer->data.local_response_norm.beta,
+                           sizeof(mt_float), 1, &mp);
+            mt_reader_read(&layer->data.local_response_norm.bias,
+                           sizeof(mt_float), 1, &mp);
         } else {
             if (layer->kind == MT_LAYER_UNKNOWN) {
-                printf("unknown layer detected, possibly because its existence "
+                printf("unknown layer detected, possibly because its "
+                       "existence "
                        "was "
                        "detected but the details were not parsed\n");
             } else {
@@ -1134,20 +1254,40 @@ mt_model *mt_model_load(const char *filename, int input_in_batch) {
     }
 
     // write footer
-    fread(&model->input_count, sizeof(int), 1, fp);
+    mt_reader_read(&model->input_count, sizeof(int), 1, &mp);
     for (int i = 0; i < model->input_count; ++i) {
-        fread(&model->inputs[i].name, sizeof(char), MAX_INPUT_OUTPUT_NAME_LEN,
-              fp);
-        fread(&model->inputs[i].id, sizeof(int), 1, fp);
+        mt_reader_read(&model->inputs[i].name, sizeof(char),
+                       MAX_INPUT_OUTPUT_NAME_LEN, &mp);
+        mt_reader_read(&model->inputs[i].id, sizeof(int), 1, &mp);
     }
-    fread(&model->output_count, sizeof(int), 1, fp);
+    mt_reader_read(&model->output_count, sizeof(int), 1, &mp);
     for (int i = 0; i < model->output_count; ++i) {
-        fread(&model->outputs[i].name, sizeof(char), MAX_INPUT_OUTPUT_NAME_LEN,
-              fp);
-        fread(&model->outputs[i].id, sizeof(int), 1, fp);
+        mt_reader_read(&model->outputs[i].name, sizeof(char),
+                       MAX_INPUT_OUTPUT_NAME_LEN, &mp);
+        mt_reader_read(&model->outputs[i].id, sizeof(int), 1, &mp);
     }
     DEBUG_LOG_F("model graph has %d input(s)", model->input_count);
     DEBUG_LOG_F("model graph has %d output(s)", model->output_count);
+
+    return model;
+}
+
+mt_model *mt_model_load(const char *filename, int input_in_batch) {
+    FILE *fp = fopen(filename, "rb");
+    MT_ASSERT_F(fp != NULL, "failed to open %s", filename);
+
+    fseek(fp, 0, SEEK_END);
+    long filelen = ftell(fp);
+    rewind(fp);
+
+    // mt_model *model  = (mt_model *)malloc(sizeof(*model));
+    char *buffer = (char *)malloc(filelen * sizeof(char));
+    // Read in the entire model file in a buffer
+    fread(buffer, filelen, 1, fp);
+    mt_model *model = mt_model_load_from_mem(buffer, filelen, input_in_batch);
+
+    free(buffer);
+    fclose(fp);
 
     return model;
 }
@@ -1231,14 +1371,15 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
                     "ndim=%d)",
                     start_axis, input->ndim);
 
-        // If input ndim is 4 with shape (2, 2, 2, 2) and start_axis is 1, then
-        // the resulting shape will be (2, 2 * 2 * 2) and ndim will be 2. If the
-        // start_axis is 2, then the resulting shape will be (2, 2, 2 * 2) and
-        // ndim will be 3. Thus, out_ndim would be start_axis+1;
+        // If input ndim is 4 with shape (2, 2, 2, 2) and start_axis is 1,
+        // then the resulting shape will be (2, 2 * 2 * 2) and ndim will
+        // be 2. If the start_axis is 2, then the resulting shape will be
+        // (2, 2, 2 * 2) and ndim will be 3. Thus, out_ndim would be
+        // start_axis+1;
         int out_ndim = start_axis + 1;
 
-        // trailing dim size will be the product of start_axis-th size till last
-        // axis shape
+        // trailing dim size will be the product of start_axis-th size till
+        // last axis shape
         int trailing_dim_size = 1;
         for (int i = start_axis; i < input->ndim; ++i) {
             trailing_dim_size *= input->shape[i];

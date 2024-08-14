@@ -1,3 +1,5 @@
+*.dbg
+*.elf
 *.jpg
 .DS_Store
 alexnet
