@@ -10,7 +10,7 @@ int main() {
     long filelen = ftell(fileptr);
     rewind(fileptr);
 
-    char *buffer = (char *)malloc(filelen * sizeof(char));
+    unsigned char *buffer = (unsigned char *)malloc(filelen * sizeof(char));
     // Read in the entire model file
     fread(buffer, filelen, 1, fileptr);
 

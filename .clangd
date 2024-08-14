@@ -1,0 +1,8 @@
+Diagnostics:
+  Suppress: ["ODR"]
+
+If:
+  PathMatch: [.*\.h, .*\.hpp]
+
+CompileFlags:
+  Add: [-DMT_IMPLEMENTATION]

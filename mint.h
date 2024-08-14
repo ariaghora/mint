@@ -529,6 +529,64 @@ static void mt__calc_strides(int *shape, int ndim, int *strides) {
     }
 }
 
+// Optimized 1D broadcasting
+static void mt__binop_1d(mt_float *a, int a_size, mt_float *b, int b_size,
+                         mt_float *result, int result_size,
+                         mt_float f(mt_float, mt_float)) {
+    if (a_size == result_size && b_size == 1) {
+        for (int i = 0; i < result_size; i++) {
+            result[i] = f(a[i], b[0]);
+        }
+    } else if (b_size == result_size && a_size == 1) {
+        for (int i = 0; i < result_size; i++) {
+            result[i] = f(a[0], b[i]);
+        }
+    } else {
+        for (int i = 0; i < result_size; i++) {
+            result[i] = f(a[i % a_size], b[i % b_size]);
+        }
+    }
+}
+
+// Optimized 2D broadcasting
+static void mt__binop_2d(mt_float *a, int *a_shape, mt_float *b, int *b_shape,
+                         mt_float *result, int *result_shape,
+                         mt_float f(mt_float, mt_float)) {
+    int a_rows = a_shape[0], a_cols = a_shape[1];
+    int b_rows = b_shape[0], b_cols = b_shape[1];
+    int result_rows = result_shape[0], result_cols = result_shape[1];
+    for (int i = 0; i < result_rows; i++) {
+        for (int j = 0; j < result_cols; j++) {
+            int a_i = i % a_rows, a_j = j % a_cols;
+            int b_i = i % b_rows, b_j = j % b_cols;
+            result[i * result_cols + j] =
+                f(a[a_i * a_cols + a_j], b[b_i * b_cols + b_j]);
+        }
+    }
+}
+
+// Optimized 3D broadcasting
+static void mt__binop_3d(mt_float *a, int *a_shape, mt_float *b, int *b_shape,
+                         mt_float *result, int *result_shape,
+                         mt_float f(mt_float, mt_float)) {
+    int a_dim0 = a_shape[0], a_dim1 = a_shape[1], a_dim2 = a_shape[2];
+    int b_dim0 = b_shape[0], b_dim1 = b_shape[1], b_dim2 = b_shape[2];
+    int result_dim0 = result_shape[0], result_dim1 = result_shape[1],
+        result_dim2 = result_shape[2];
+
+    for (int i = 0; i < result_dim0; i++) {
+        for (int j = 0; j < result_dim1; j++) {
+            for (int k = 0; k < result_dim2; k++) {
+                int a_i = i % a_dim0, a_j = j % a_dim1, a_k = k % a_dim2;
+                int b_i = i % b_dim0, b_j = j % b_dim1, b_k = k % b_dim2;
+                result[(i * result_dim1 + j) * result_dim2 + k] =
+                    f(a[(a_i * a_dim1 + a_j) * a_dim2 + a_k],
+                      b[(b_i * b_dim1 + b_j) * b_dim2 + b_k]);
+            }
+        }
+    }
+}
+
 // General binary operator.
 // NOTE (Aria): This is meant to be used internally.
 mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
@@ -540,49 +598,61 @@ mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
 
     mt_tensor *result = mt_tensor_alloc(result_shape, result_ndim);
 
-    int a_strides[MAX_TENSOR_NDIM], b_strides[MAX_TENSOR_NDIM],
-        result_strides[MAX_TENSOR_NDIM];
+    if (result_ndim == 1) {
+        mt__binop_1d(a->data, a->shape[0], b->data, b->shape[0], result->data,
+                     result_shape[0], f);
+    } else if (result_ndim == 2) {
+        mt__binop_2d(a->data, a->shape, b->data, b->shape, result->data,
+                     result_shape, f);
+    } else if (result_ndim == 3) {
+        mt__binop_3d(a->data, a->shape, b->data, b->shape, result->data,
+                     result_shape, f);
+    } else {
+        int a_strides[MAX_TENSOR_NDIM], b_strides[MAX_TENSOR_NDIM],
+            result_strides[MAX_TENSOR_NDIM];
 
-    mt__calc_strides(a->shape, a->ndim, a_strides);
-    mt__calc_strides(b->shape, b->ndim, b_strides);
-    mt__calc_strides(result_shape, result_ndim, result_strides);
+        mt__calc_strides(a->shape, a->ndim, a_strides);
+        mt__calc_strides(b->shape, b->ndim, b_strides);
+        mt__calc_strides(result_shape, result_ndim, result_strides);
 
-    int a_broadcast_shape[MAX_TENSOR_NDIM], b_broadcast_shape[MAX_TENSOR_NDIM];
-    for (int i = 0; i < result_ndim; i++) {
-        a_broadcast_shape[i] = (i < result_ndim - a->ndim)
-                                   ? 1
-                                   : a->shape[i - (result_ndim - a->ndim)];
-        b_broadcast_shape[i] = (i < result_ndim - b->ndim)
-                                   ? 1
-                                   : b->shape[i - (result_ndim - b->ndim)];
-    }
+        int a_broadcast_shape[MAX_TENSOR_NDIM],
+            b_broadcast_shape[MAX_TENSOR_NDIM];
+        for (int i = 0; i < result_ndim; i++) {
+            a_broadcast_shape[i] = (i < result_ndim - a->ndim)
+                                       ? 1
+                                       : a->shape[i - (result_ndim - a->ndim)];
+            b_broadcast_shape[i] = (i < result_ndim - b->ndim)
+                                       ? 1
+                                       : b->shape[i - (result_ndim - b->ndim)];
+        }
 
-    int numel = mt_tensor_count_element(result);
+        int numel = mt_tensor_count_element(result);
 
 #pragma omp parallel for
-    // TODO: optimize for special ndims, identic shape, and tensor-scalar
-    // ops
-    for (int i = 0; i < numel; i++) {
-        int indices[MAX_TENSOR_NDIM];
-        int temp = i;
-        for (int j = 0; j < result_ndim; j++) {
-            indices[j] = temp / result_strides[j];
-            temp %= result_strides[j];
-        }
+        // TODO: optimize for special ndims, identic shape, and tensor-scalar
+        // ops
+        for (int i = 0; i < numel; i++) {
+            int indices[MAX_TENSOR_NDIM];
+            int temp = i;
+            for (int j = 0; j < result_ndim; j++) {
+                indices[j] = temp / result_strides[j];
+                temp %= result_strides[j];
+            }
 
-        int a_index = 0, b_index = 0;
-        for (int j = 0; j < result_ndim; j++) {
-            a_index += (indices[j] % a_broadcast_shape[j]) *
-                       (j < result_ndim - a->ndim
-                            ? 0
-                            : a_strides[j - (result_ndim - a->ndim)]);
-            b_index += (indices[j] % b_broadcast_shape[j]) *
-                       (j < result_ndim - b->ndim
-                            ? 0
-                            : b_strides[j - (result_ndim - b->ndim)]);
-        }
+            int a_index = 0, b_index = 0;
+            for (int j = 0; j < result_ndim; j++) {
+                a_index += (indices[j] % a_broadcast_shape[j]) *
+                           (j < result_ndim - a->ndim
+                                ? 0
+                                : a_strides[j - (result_ndim - a->ndim)]);
+                b_index += (indices[j] % b_broadcast_shape[j]) *
+                           (j < result_ndim - b->ndim
+                                ? 0
+                                : b_strides[j - (result_ndim - b->ndim)]);
+            }
 
-        result->data[i] = f(a->data[a_index], b->data[b_index]);
+            result->data[i] = f(a->data[a_index], b->data[b_index]);
+        }
     }
 
     return result;
@@ -1124,9 +1194,9 @@ mt_tensor *mt_tensor_load_image(char *filename) {
 #endif
 
 typedef struct {
-    char  *data;
-    size_t pos;
-    size_t size;
+    unsigned char *data;
+    size_t         pos;
+    size_t         size;
 } mt_reader;
 
 size_t mt_reader_read(void *ptr, size_t size, size_t count, mt_reader *stream) {
@@ -1158,7 +1228,7 @@ mt_tensor *mt_tensor_memread(mt_reader *mp) {
     return t;
 }
 
-mt_model *mt_model_load_from_mem(char *model_bytes, long len,
+mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
                                  int input_in_batch) {
 
     mt_reader mp    = (mt_reader){model_bytes, 0, len};
@@ -1281,7 +1351,7 @@ mt_model *mt_model_load(const char *filename, int input_in_batch) {
     rewind(fp);
 
     // mt_model *model  = (mt_model *)malloc(sizeof(*model));
-    char *buffer = (char *)malloc(filelen * sizeof(char));
+    unsigned char *buffer = (unsigned char *)malloc(filelen * sizeof(char));
     // Read in the entire model file in a buffer
     fread(buffer, filelen, 1, fp);
     mt_model *model = mt_model_load_from_mem(buffer, filelen, input_in_batch);
