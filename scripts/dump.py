@@ -28,8 +28,10 @@ LayerKind = Enum(
         "MAX_POOL_2D",
         "MUL",
         "RELU",
+        "RESHAPE",
         "SIGMOID",
         "SUB",
+        "TRANSPOSE",
     ],
     start=0,
 )
@@ -206,17 +208,26 @@ def write_sub(
     write_layer_header(f, LayerKind.SUB.value, node)
     print(f"wrote Sub {id}")
 
+
 def write_mul(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
     write_layer_header(f, LayerKind.MUL.value, node)
     print(f"wrote Mul {id}")
 
+
 def write_div(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
     write_layer_header(f, LayerKind.DIV.value, node)
     print(f"wrote Div {id}")
+
+
+def write_exp(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.EXP.value, node)
+    print(f"wrote Exp {id}")
 
 
 def write_avg_pool_2d(
@@ -329,7 +340,8 @@ if __name__ == "__main__":
                     write_mul(f, id, node, model["tensors"])
                 case "Div":
                     write_div(f, id, node, model["tensors"])
-
+                case "Exp":
+                    write_exp(f, id, node, model["tensors"])
                 case "AveragePool":
                     write_avg_pool_2d(f, id, node, model["tensors"])
                 case "Conv":

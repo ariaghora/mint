@@ -118,10 +118,42 @@ void test_binop(Stats *stats) {
     MT_TENSOR_BULK_FREE(4, a, b, res_add, res_mul);
 }
 
+void test_permute_dim(Stats *stats) {
+    MT_SECTION_TITLE("(0,1)->(1,0)");
+    mt_tensor *a   = mt_tensor_alloc_values(MT_ARR_INT(3, 2), 2,
+                                            MT_ARR_FLOAT(1, 2, 3, 4, 5, 6));
+    mt_tensor *res = mt_permute_dims(a, MT_ARR_INT(1, 0));
+    MT_ASSERT_TEST("shape", mt_arr_same(res->shape, MT_ARR_INT(2, 3), 2, SZ_I));
+    MT_ASSERT_TEST(
+        "data",
+        mt_arr_same(res->data, MT_ARR_FLOAT(1, 3, 5, 2, 4, 6), 6, SZ_F));
+    mt_tensor_free(a);
+    mt_tensor_free(res);
+
+    MT_SECTION_TITLE("(c,h,w)->(w,h,c)");
+    a   = mt_tensor_alloc_values(MT_ARR_INT(3, 2, 4), 3,
+                                 MT_ARR_FLOAT(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+                                              12, 13, 14, 15, 16, 17, 18, 19, 20,
+                                              21, 22, 23, 24));
+    res = mt_permute_dims(a, MT_ARR_INT(2, 1, 0));
+    MT_ASSERT_TEST("shape",
+                   mt_arr_same(res->shape, MT_ARR_INT(4, 2, 3), 3, SZ_I));
+    MT_ASSERT_TEST(
+        "data",
+        mt_arr_same(res->data,
+                    MT_ARR_FLOAT(1, 9, 17, 5, 13, 21, 2, 10, 18, 6, 14, 22, 3,
+                                 11, 19, 7, 15, 23, 4, 12, 20, 8, 16, 24),
+                    24, SZ_F));
+
+    mt_tensor_free(a);
+    mt_tensor_free(res);
+}
+
 int main() {
     Stats s = {0};
 
     test_binop(&s);
+    test_permute_dim(&s);
 
     printf("FAILED: %d, PASSED: %d\n", s.failed, s.pass);
     return 0;

@@ -204,6 +204,8 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
                           int pad);
 // Element-wise division
 mt_tensor *mt_div(mt_tensor *a, mt_tensor *b);
+// Element-wise exponentiation
+mt_tensor *mt_exp(mt_tensor *a);
 // Pooling by taking average of each channel, reducing each channel's matrix
 // into a single value, i.e., the mean.
 mt_tensor *mt_global_avg_pool_2d(mt_tensor *x);
@@ -220,6 +222,8 @@ mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b);
 mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int pad);
 // Element-wise multiplication
 mt_tensor *mt_mul(mt_tensor *a, mt_tensor *b);
+// Swap tensor's dimensions
+mt_tensor *mt_permute_dims(mt_tensor *a, int *dims);
 // Relu activation function, in-place version.
 void       mt_relu_inplace(mt_tensor *t);
 // Element-wise subtraction
@@ -271,8 +275,10 @@ typedef enum {
     MT_LAYER_MAX_POOL_2D,
     MT_LAYER_MUL,
     MT_LAYER_RELU,
+    MT_LAYER_RESHAPE,
     MT_LAYER_SIGMOID,
     MT_LAYER_SUB,
+    MT_LAYER_TRANSPOSE,
 } mt_layer_kind;
 
 mt_model  *mt_model_load(const char *filename, int input_in_batch);
@@ -437,9 +443,9 @@ typedef struct mt_model {
     do {                                                                       \
         fprintf(stderr,                                                        \
                 "\x1b[31m"                                                     \
-                "[ERROR] %s: %s\n"                                             \
+                "[ERROR] %s\n"                                                 \
                 "\x1b[0m",                                                     \
-                msg, strerror(errno));                                         \
+                msg);                                                          \
         exit(1);                                                               \
     } while (0)
 
@@ -449,7 +455,7 @@ typedef struct mt_model {
                 "\x1b[31m"                                                     \
                 "[ERROR] " fmt ": %s\n"                                        \
                 "\x1b[0m",                                                     \
-                __VA_ARGS__, strerror(errno));                                 \
+                __VA_ARGS__);                                                  \
         exit(1);                                                               \
     } while (0)
 
@@ -459,6 +465,15 @@ int mt_tensor_count_element(mt_tensor *t) {
         count *= t->shape[i];
     }
     return count;
+}
+
+// Some helper functions
+static int mt__product(const int *arr, int n) {
+    int result = 1;
+    for (int i = 0; i < n; i++) {
+        result *= arr[i];
+    }
+    return result;
 }
 
 mt_tensor *mt_adaptive_avg_pool_2d(mt_tensor *x, int out_h, int out_w) {
@@ -658,6 +673,14 @@ mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
     }
 
     return result;
+}
+
+mt_tensor *mt__unop(mt_tensor *t, mt_float f(mt_float)) {
+    mt_tensor *output = mt_tensor_alloc(t->shape, t->ndim);
+    for (int i = 0; i > mt_tensor_count_element(t); ++i) {
+        output->data[i] = f(t->data[i]);
+    }
+    return output;
 }
 
 static mt_float mt__s_add(mt_float a, mt_float b) { return a + b; }
@@ -904,6 +927,9 @@ mt_tensor      *mt_div(mt_tensor *a, mt_tensor *b) {
     return mt__binop(a, b, mt__s_div);
 }
 
+static mt_float mt__s_exp(mt_float x) { return exp(x); }
+mt_tensor      *mt_exp(mt_tensor *t) { return mt__unop(t, mt__s_exp); }
+
 mt_tensor *mt_global_avg_pool_2d(mt_tensor *x) {
     MT_ASSERT(x->ndim == 3, "Input tensor must be 3-dimensional");
     int C = x->shape[0];
@@ -1071,6 +1097,173 @@ mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int pad) {
 static mt_float mt__s_mul(mt_float a, mt_float b) { return a * b; }
 mt_tensor      *mt_mul(mt_tensor *a, mt_tensor *b) {
     return mt__binop(a, b, mt__s_mul);
+}
+
+// General permute function
+mt_tensor *mt__permute(mt_tensor *input, const int *dims, int ndim) {
+    MT_ASSERT(input->ndim == ndim,
+              "Input tensor dimensions must match permutation dimensions");
+
+    // Create new shape and strides based on permutation
+    int new_shape[MAX_TENSOR_NDIM];
+    int new_strides[MAX_TENSOR_NDIM];
+    int old_strides[MAX_TENSOR_NDIM];
+
+    old_strides[ndim - 1] = 1;
+    for (int i = ndim - 2; i >= 0; i--) {
+        old_strides[i] = old_strides[i + 1] * input->shape[i + 1];
+    }
+
+    for (int i = 0; i < ndim; i++) {
+        new_shape[i]   = input->shape[dims[i]];
+        new_strides[i] = old_strides[dims[i]];
+    }
+
+    // Allocate new tensor
+    mt_tensor *output = mt_tensor_alloc(new_shape, ndim);
+
+    // Perform permutation
+    int total_elements = mt__product(input->shape, ndim);
+
+    // Determine the fastest changing dimension in the output
+    int fastest_dim = 0;
+    for (int i = 1; i < ndim; i++) {
+        if (new_strides[i] < new_strides[fastest_dim]) {
+            fastest_dim = i;
+        }
+    }
+
+    for (int i = 0; i < new_shape[fastest_dim]; i++) {
+        // Calculate the base index for this slice
+        int base_index = i * new_strides[fastest_dim];
+
+        // Iterate over the rest of the dimensions
+        for (int j = 0; j < total_elements / new_shape[fastest_dim]; j++) {
+            int old_index = 0;
+            int new_index = base_index;
+            int temp      = j;
+
+            for (int k = 0; k < ndim; k++) {
+                if (k != fastest_dim) {
+                    int dim_index = temp % new_shape[k];
+                    temp /= new_shape[k];
+                    old_index += dim_index * old_strides[dims[k]];
+                    new_index += dim_index * new_strides[k];
+                }
+            }
+
+            output->data[new_index] = input->data[old_index];
+        }
+    }
+
+    return output;
+}
+
+// Specialized function for 2D permute
+mt_tensor *mt__permute_2d(mt_tensor *input, const int *dims) {
+    MT_ASSERT(input->ndim == 2, "Input tensor must be 2-dimensional");
+
+    int        new_shape[2] = {input->shape[dims[0]], input->shape[dims[1]]};
+    mt_tensor *output       = mt_tensor_alloc(new_shape, 2);
+
+    int h = input->shape[0], w = input->shape[1];
+
+    if (dims[0] == 0 && dims[1] == 1) {
+        memcpy(output->data, input->data, h * w * sizeof(mt_float));
+    } else {
+#pragma omp parallel for schedule(static)
+        for (int i = 0; i < w; i++) {
+            for (int j = 0; j < h; j++) {
+                output->data[i * h + j] = input->data[j * w + i];
+            }
+        }
+    }
+
+    return output;
+}
+
+// Specialized function for 3D permute
+mt_tensor *mt__permute_3d(mt_tensor *input, const int *dims) {
+    MT_ASSERT(input->ndim == 3, "Input tensor must be 3-dimensional");
+
+    int        new_shape[3] = {input->shape[dims[0]], input->shape[dims[1]],
+                               input->shape[dims[2]]};
+    mt_tensor *output       = mt_tensor_alloc(new_shape, 3);
+
+    int d = input->shape[0], h = input->shape[1], w = input->shape[2];
+    int new_d = new_shape[0], new_h = new_shape[1], new_w = new_shape[2];
+
+    for (int i = 0; i < new_d; i++) {
+        for (int j = 0; j < new_h; j++) {
+            for (int k = 0; k < new_w; k++) {
+                int old_i = dims[0] == 0 ? i : dims[1] == 0 ? j : k;
+                int old_j = dims[0] == 1 ? i : dims[1] == 1 ? j : k;
+                int old_k = dims[0] == 2 ? i : dims[1] == 2 ? j : k;
+                output->data[(i * new_h + j) * new_w + k] =
+                    input->data[(old_i * h + old_j) * w + old_k];
+            }
+        }
+    }
+
+    return output;
+}
+
+// Specialized function for 4D permute
+mt_tensor *mt__permute_4d(mt_tensor *input, const int *dims) {
+    MT_ASSERT(input->ndim == 4, "Input tensor must be 4-dimensional");
+
+    int        new_shape[4] = {input->shape[dims[0]], input->shape[dims[1]],
+                               input->shape[dims[2]], input->shape[dims[3]]};
+    mt_tensor *output       = mt_tensor_alloc(new_shape, 4);
+
+    int a = input->shape[0], b = input->shape[1], c = input->shape[2],
+        d     = input->shape[3];
+    int new_a = new_shape[0], new_b = new_shape[1], new_c = new_shape[2],
+        new_d = new_shape[3];
+
+    for (int i = 0; i < new_a; i++) {
+        for (int j = 0; j < new_b; j++) {
+            for (int k = 0; k < new_c; k++) {
+                for (int l = 0; l < new_d; l++) {
+                    int old_i = dims[0] == 0   ? i
+                                : dims[1] == 0 ? j
+                                : dims[2] == 0 ? k
+                                               : l;
+                    int old_j = dims[0] == 1   ? i
+                                : dims[1] == 1 ? j
+                                : dims[2] == 1 ? k
+                                               : l;
+                    int old_k = dims[0] == 2   ? i
+                                : dims[1] == 2 ? j
+                                : dims[2] == 2 ? k
+                                               : l;
+                    int old_l = dims[0] == 3   ? i
+                                : dims[1] == 3 ? j
+                                : dims[2] == 3 ? k
+                                               : l;
+                    output->data[((i * new_b + j) * new_c + k) * new_d + l] =
+                        input->data[((old_i * b + old_j) * c + old_k) * d +
+                                    old_l];
+                }
+            }
+        }
+    }
+
+    return output;
+}
+
+// Main permute function that selects the appropriate implementation
+mt_tensor *mt_permute_dims(mt_tensor *t, int *dims) {
+    switch (t->ndim) {
+    case 2:
+        return mt__permute_2d(t, dims);
+    case 3:
+        return mt__permute_3d(t, dims);
+    case 4:
+        return mt__permute_4d(t, dims);
+    default:
+        return mt__permute(t, dims, t->ndim);
+    }
 }
 
 void        mt_relu_inplace(mt_tensor *t) {
