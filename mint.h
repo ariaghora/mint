@@ -330,7 +330,6 @@ typedef struct mt_tensor {
 
     int ndim;
     int shape[MAX_TENSOR_NDIM];
-    int count_deps;
 } mt_tensor;
 
 typedef struct {
@@ -1538,9 +1537,8 @@ void mt_tensor_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim) {
 mt_tensor *mt_tensor_alloc(int *shape, int ndim) {
     MT_ASSERT(ndim <= MAX_TENSOR_NDIM, "");
 
-    mt_tensor *t  = (mt_tensor *)calloc(1, sizeof(*t));
-    t->ndim       = ndim;
-    t->count_deps = 0;
+    mt_tensor *t = (mt_tensor *)calloc(1, sizeof(*t));
+    t->ndim      = ndim;
     memcpy(t->shape, shape, ndim * sizeof(*shape));
 
     int numel = mt_tensor_count_element(t);
