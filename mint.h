@@ -198,10 +198,10 @@ mt_tensor *mt_add(mt_tensor *a, mt_tensor *b);
 // operation will broadcast b along matmul(x, w)'s first dimension.
 mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b);
 // Average pooling
-mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride, int pad);
+mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride, int *pad);
 // Convolution 2d
 mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
-                          int pad);
+                          int *pads);
 // Element-wise division
 mt_tensor *mt_div(mt_tensor *a, mt_tensor *b);
 // Element-wise exponentiation
@@ -333,7 +333,8 @@ typedef struct {
         struct {
             int size;
             int stride;
-            int pad;
+            int pads[4];
+            int group;
         } avg_pool_2d;
 
         // MT_LAYER_CONV_2D
@@ -341,7 +342,7 @@ typedef struct {
             int w_id;
             int b_id;
             int stride;
-            int pad;
+            int pads[4];
         } conv_2d;
 
         // MT_LAYER_DENSE
@@ -713,20 +714,26 @@ mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b) {
     return res;
 }
 
-mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride, int pad) {
+mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride,
+                          int *pads) {
     MT_ASSERT(x->ndim == 3, "Input tensor must be 3-dimensional");
     int C    = x->shape[0];
     int H_in = x->shape[1];
     int W_in = x->shape[2];
 
     // Calculate output dimensions with padding
-    int H_out = (H_in + 2 * pad - kernel_size) / stride + 1;
-    int W_out = (W_in + 2 * pad - kernel_size) / stride + 1;
+    int pad_h_begin = pads[0];
+    int pad_w_begin = pads[1];
+    int pad_h_end   = pads[2];
+    int pad_w_end   = pads[3];
+
+    // Calculate output dimensions with padding
+    int H_out = (H_in + pad_h_begin + pad_h_end - kernel_size) / stride + 1;
+    int W_out = (W_in + pad_w_begin + pad_w_end - kernel_size) / stride + 1;
 
     // Allocate output tensor
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C, H_out, W_out), 3);
 
-#pragma omp parallel for collapse(3)
     for (int c = 0; c < C; c++) {
         for (int h_out = 0; h_out < H_out; h_out++) {
             for (int w_out = 0; w_out < W_out; w_out++) {
@@ -735,8 +742,8 @@ mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride, int pad) {
 
                 for (int kh = 0; kh < kernel_size; kh++) {
                     for (int kw = 0; kw < kernel_size; kw++) {
-                        int h_in = h_out * stride + kh - pad;
-                        int w_in = w_out * stride + kw - pad;
+                        int h_in = h_out * stride + kh - pad_h_begin;
+                        int w_in = w_out * stride + kw - pad_w_begin;
 
                         if (h_in >= 0 && h_in < H_in && w_in >= 0 &&
                             w_in < W_in) {
@@ -758,12 +765,14 @@ mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride, int pad) {
 }
 
 mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
-                          int pad) {
-    MT_ASSERT(x->ndim == 3, "");
-    MT_ASSERT(w->ndim == 4, "");
-    MT_ASSERT(b->ndim == 1, "");
-    MT_ASSERT(x->shape[0] == w->shape[1], "");
-    MT_ASSERT(b->shape[0] == w->shape[0], "");
+                          int *pads) {
+    MT_ASSERT(x->ndim == 3, "Input tensor must be 3-dimensional");
+    MT_ASSERT(w->ndim == 4, "Weight tensor must be 4-dimensional");
+    MT_ASSERT(b->ndim == 1, "Bias tensor must be 1-dimensional");
+    MT_ASSERT(x->shape[0] == w->shape[1],
+              "Input and weight channel dimensions must match");
+    MT_ASSERT(b->shape[0] == w->shape[0],
+              "Bias dimension must match output channel dimension");
 
     int C_in = x->shape[0];
     int H_in = x->shape[1];
@@ -773,9 +782,14 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
     int K_h   = w->shape[2];
     int K_w   = w->shape[3];
 
+    int pad_h_begin = pads[0];
+    int pad_w_begin = pads[1];
+    int pad_h_end   = pads[2];
+    int pad_w_end   = pads[3];
+
     // Calculate output dimensions with padding
-    int H_out = (H_in + 2 * pad - K_h) / stride + 1;
-    int W_out = (W_in + 2 * pad - K_w) / stride + 1;
+    int H_out = (H_in + pad_h_begin + pad_h_end - K_h) / stride + 1;
+    int W_out = (W_in + pad_w_begin + pad_w_end - K_w) / stride + 1;
 
 #ifdef MT_USE_IM2COL_CONV
     // Create im2col matrix
@@ -784,8 +798,8 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
     mt_tensor *im2col =
         mt_tensor_alloc(MT_ARR_INT(im2col_rows, im2col_cols), 2);
 
+// Perform im2col operation
 #pragma omp parallel for collapse(2)
-    // Perform im2col operation
     for (int i = 0; i < im2col_cols; i++) {
         for (int j = 0; j < im2col_rows; j++) {
             int w_out = i % W_out;
@@ -794,8 +808,8 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
             int k_h   = (j / K_w) % K_h;
             int k_w   = j % K_w;
 
-            int h_in = h_out * stride + k_h - pad;
-            int w_in = w_out * stride + k_w - pad;
+            int h_in = h_out * stride + k_h - pad_h_begin;
+            int w_in = w_out * stride + k_w - pad_w_begin;
 
             if (h_in >= 0 && h_in < H_in && w_in >= 0 && w_in < W_in) {
                 im2col->data[j * im2col_cols + i] =
@@ -821,10 +835,8 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
     for (int c = 0; c < C_out; c++) {
         for (int h = 0; h < H_out; h++) {
             for (int w = 0; w < W_out; w++) {
-                int idx = c * H_out * W_out + h * W_out + w;
-                output->data[idx] =
-                    output_2d->data[c * H_out * W_out + h * W_out + w] +
-                    b->data[c];
+                int idx           = c * H_out * W_out + h * W_out + w;
+                output->data[idx] = output_2d->data[idx] + b->data[c];
             }
         }
     }
@@ -838,7 +850,7 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
 #else
     // Allocate output tensor
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C_out, H_out, W_out), 3);
-#pragma omp parallel for
+#pragma omp parallel for collapse(3)
     for (int c_out = 0; c_out < C_out; c_out++) {
         for (int h_out = 0; h_out < H_out; h_out++) {
             for (int w_out = 0; w_out < W_out; w_out++) {
@@ -847,8 +859,8 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
                 for (int c_in = 0; c_in < C_in; c_in++) {
                     for (int kh = 0; kh < K_h; kh++) {
                         for (int kw = 0; kw < K_w; kw++) {
-                            int h_in = (int)(h_out * stride + kh - pad);
-                            int w_in = (int)(w_out * stride + kw - pad);
+                            int h_in = h_out * stride + kh - pad_h_begin;
+                            int w_in = w_out * stride + kw - pad_w_begin;
                             if (h_in >= 0 && h_in < H_in && w_in >= 0 &&
                                 w_in < W_in) {
                                 mt_float x_val = x->data[c_in * H_in * W_in +
@@ -1585,10 +1597,10 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             mt_reader_read(&layer->data.avg_pool_2d.size, sizeof(int), 1, &mp);
             mt_reader_read(&layer->data.avg_pool_2d.stride, sizeof(int), 1,
                            &mp);
-            mt_reader_read(&layer->data.avg_pool_2d.pad, sizeof(int), 1, &mp);
+            mt_reader_read(&layer->data.avg_pool_2d.pads, sizeof(int), 1, &mp);
         } else if (layer->kind == MT_LAYER_CONV_2D) {
             mt_reader_read(&layer->data.conv_2d.stride, sizeof(int), 1, &mp);
-            mt_reader_read(&layer->data.conv_2d.pad, sizeof(int), 1, &mp);
+            mt_reader_read(&layer->data.conv_2d.pads, sizeof(int), 4, &mp);
             int w_idx                = layer->inputs[1];
             layer->data.conv_2d.w_id = w_idx;
             model->tensors[w_idx]    = mt_tensor_memread(&mp);
@@ -1606,7 +1618,7 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             mt_reader_read(&layer->data.max_pool_2d.size, sizeof(int), 1, &mp);
             mt_reader_read(&layer->data.max_pool_2d.stride, sizeof(int), 1,
                            &mp);
-            mt_reader_read(&layer->data.max_pool_2d.pad, sizeof(int), 1, &mp);
+            mt_reader_read(&layer->data.max_pool_2d.pad, sizeof(int), 4, &mp);
         } else if (layer->kind == MT_LAYER_FLATTEN) {
             mt_reader_read(&layer->data.flatten.axis, sizeof(int), 1, &mp);
 
@@ -1730,9 +1742,9 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
     }
     case MT_LAYER_AVG_POOL_2D: {
         mt_tensor *input = model->tensors[l->inputs[0]];
-        res =
-            mt_avg_pool_2d(input, l->data.avg_pool_2d.size,
-                           l->data.avg_pool_2d.stride, l->data.avg_pool_2d.pad);
+        res              = mt_avg_pool_2d(input, l->data.avg_pool_2d.size,
+                                          l->data.avg_pool_2d.stride,
+                                          l->data.avg_pool_2d.pads);
         model->tensors[l->outputs[0]] = res;
         break;
     }
@@ -1740,7 +1752,7 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res = mt_convolve_2d(input, model->tensors[l->data.conv_2d.w_id],
                              model->tensors[l->data.conv_2d.b_id],
-                             l->data.conv_2d.stride, l->data.conv_2d.pad);
+                             l->data.conv_2d.stride, l->data.conv_2d.pads);
         model->tensors[l->outputs[0]] = res;
         break;
     }

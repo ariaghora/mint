@@ -187,11 +187,10 @@ def write_max_pool(
     pads = node["attributes"]["pads"]
     assert all(v == shape[0] for v in shape)
     assert all(v == strides[0] for v in strides)
-    assert all(v == pads[0] for v in pads), pads
 
     np.array(shape[0], dtype=np.int32).tofile(f)
     np.array(strides[0], dtype=np.int32).tofile(f)
-    np.array(pads[0], dtype=np.int32).tofile(f)
+    np.array(pads, dtype=np.int32).tofile(f)
     print(f"wrote MaxPool {id}")
 
 
@@ -254,13 +253,15 @@ def write_conv(
 ):
     write_layer_header(f, LayerKind.CONV_2D.value, node)
 
-    # NOTE: we refuse mutliple different stride and pad values
+    group = node["attributes"].get("group", 1)
+    assert group == 1, "cannot handle grouped convolution yet"
+
+    # NOTE: we refuse mutliple different stride values for now
     strides = node["attributes"]["strides"]
     pads = node["attributes"]["pads"]
     assert all(v == strides[0] for v in strides)
-    assert all(v == pads[0] for v in pads)
     np.array(strides[0], dtype=np.int32).tofile(f)
-    np.array(pads[0], dtype=np.int32).tofile(f)
+    np.array(pads, dtype=np.int32).tofile(f)
 
     # write w
     w_idx = node["inputs"][1]
