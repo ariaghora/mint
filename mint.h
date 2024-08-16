@@ -199,6 +199,8 @@ mt_tensor *mt_add(mt_tensor *a, mt_tensor *b);
 mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b);
 // Average pooling
 mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride, int *pad);
+// Concatenate several tensors at a certain axis
+mt_tensor *mt_concat(mt_tensor **inputs, int num_inputs, int axis);
 // Convolution 2d
 mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
                           int *pads);
@@ -268,19 +270,24 @@ typedef enum {
     MT_LAYER_UNKNOWN,
     MT_LAYER_ADD,
     MT_LAYER_AVG_POOL_2D,
+    MT_LAYER_CAST, // ignored
+    MT_LAYER_CONCAT,
     MT_LAYER_CONV_2D,
     MT_LAYER_DENSE,
     MT_LAYER_DIV,
     MT_LAYER_EXP,
     MT_LAYER_FLATTEN,
     MT_LAYER_GLOBAL_AVG_POOL,
+    MT_LAYER_LEAKY_RELU,
     MT_LAYER_LOCAL_RESPONSE_NORM,
+    MT_LAYER_LOG,
     MT_LAYER_MAX_POOL_2D,
     MT_LAYER_MUL,
     MT_LAYER_RELU,
     MT_LAYER_RESHAPE,
     MT_LAYER_SIGMOID,
     MT_LAYER_SUB,
+    MT_LAYER_TANH,
     MT_LAYER_TRANSPOSE,
 } mt_layer_kind;
 
@@ -370,6 +377,11 @@ typedef struct {
             int stride;
             int pad;
         } max_pool_2d;
+
+        // MT_LAYER_TRANSPOSE
+        struct {
+            int perm[MAX_TENSOR_NDIM];
+        } transpose;
     } data;
     int prev_count;
     int prev[MAX_LAYER_PREV_COUNT];
@@ -764,6 +776,54 @@ mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride,
     return output;
 }
 
+mt_tensor *mt_concat(mt_tensor **inputs, int num_inputs, int axis) {
+    MT_ASSERT(num_inputs > 0, "provide at least one tensor to concat");
+    MT_ASSERT_F(axis >= -inputs[0]->ndim && axis < inputs[0]->ndim,
+                "axis must be between %d and %d (inclusive)", -inputs[0]->ndim,
+                inputs[0]->ndim);
+
+    // Normalize negative axis
+    if (axis < 0) {
+        axis += inputs[0]->ndim;
+    }
+
+    // Calculate the shape of the output tensor
+    int output_shape[MAX_TENSOR_NDIM];
+    memcpy(output_shape, inputs[0]->shape, inputs[0]->ndim * sizeof(int));
+
+    for (int i = 1; i < num_inputs; i++) {
+        output_shape[axis] += inputs[i]->shape[axis];
+    }
+
+    // Allocate the output tensor
+    mt_tensor *output = mt_tensor_alloc(output_shape, inputs[0]->ndim);
+
+    // Calculate sizes for efficient copying
+    int pre_axis_size = mt__product(inputs[0]->shape, axis);
+    int post_axis_size =
+        mt__product(inputs[0]->shape + axis + 1, inputs[0]->ndim - axis - 1);
+
+    // Copy data from input tensors to output tensor
+    size_t offset = 0;
+    for (int i = 0; i < num_inputs; i++) {
+        mt_tensor *input     = inputs[i];
+        int        axis_size = input->shape[axis];
+
+        for (int pre = 0; pre < pre_axis_size; pre++) {
+            for (int ax = 0; ax < axis_size; ax++) {
+                size_t input_offset = (pre * axis_size + ax) * post_axis_size;
+                size_t output_offset =
+                    (pre * output_shape[axis] + offset + ax) * post_axis_size;
+                memcpy(output->data + output_offset, input->data + input_offset,
+                       post_axis_size * sizeof(mt_float));
+            }
+        }
+
+        offset += axis_size;
+    }
+
+    return output;
+}
 mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
                           int *pads) {
     MT_ASSERT(x->ndim == 3, "Input tensor must be 3-dimensional");
@@ -1614,6 +1674,17 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             int b_idx                = layer->inputs[2];
             layer->data.conv_2d.b_id = b_idx;
             model->tensors[b_idx]    = mt_tensor_memread(&mp);
+        } else if (layer->kind == MT_LAYER_LOCAL_RESPONSE_NORM) {
+            mt_reader_read(&layer->data.local_response_norm.size, sizeof(int),
+                           1, &mp);
+            mt_reader_read(&layer->data.local_response_norm.alpha,
+                           sizeof(mt_float), 1, &mp);
+            mt_reader_read(&layer->data.local_response_norm.beta,
+                           sizeof(mt_float), 1, &mp);
+            mt_reader_read(&layer->data.local_response_norm.bias,
+                           sizeof(mt_float), 1, &mp);
+        } else if (layer->kind == MT_LAYER_LOG) {
+            // nothing to read
         } else if (layer->kind == MT_LAYER_MAX_POOL_2D) {
             mt_reader_read(&layer->data.max_pool_2d.size, sizeof(int), 1, &mp);
             mt_reader_read(&layer->data.max_pool_2d.stride, sizeof(int), 1,
@@ -1634,15 +1705,14 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             // nothing to read
         } else if (layer->kind == MT_LAYER_RELU) {
             // nothing to read
-        } else if (layer->kind == MT_LAYER_LOCAL_RESPONSE_NORM) {
-            mt_reader_read(&layer->data.local_response_norm.size, sizeof(int),
-                           1, &mp);
-            mt_reader_read(&layer->data.local_response_norm.alpha,
-                           sizeof(mt_float), 1, &mp);
-            mt_reader_read(&layer->data.local_response_norm.beta,
-                           sizeof(mt_float), 1, &mp);
-            mt_reader_read(&layer->data.local_response_norm.bias,
-                           sizeof(mt_float), 1, &mp);
+        } else if (layer->kind == MT_LAYER_TRANSPOSE) {
+            int ndim;
+            mt_reader_read(&ndim, sizeof(int), 1, &mp);
+            MT_ASSERT_F(
+                ndim <= MAX_TENSOR_NDIM,
+                "input ndim (%d) exceeds maximum allowed tensor dimension (%d)",
+                ndim, MAX_TENSOR_NDIM);
+            mt_reader_read(&layer->data.transpose, sizeof(int), ndim, &mp);
         } else {
             if (layer->kind == MT_LAYER_UNKNOWN) {
                 printf("unknown layer detected, possibly because its "

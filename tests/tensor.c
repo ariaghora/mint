@@ -202,36 +202,145 @@ void test_slice(Stats *stats) {
                                MT_ARR_FLOAT(1, 3, 5, 11, 13, 15, 21, 23, 25), 9,
                                SZ_F));
     mt_tensor_free(res3);
+}
 
-    // MT_SECTION_TITLE("1D slice with reverse step");
-    // mt_tensor *c = mt_tensor_alloc_values(
-    //     MT_ARR_INT(10), 1, MT_ARR_FLOAT(0, 1, 2, 3, 4, 5, 6, 7, 8, 9));
-    // int        starts4[] = {9};
-    // int        ends4[]   = {-1};
-    // int        steps4[]  = {-2};
-    // mt_tensor *res4      = mt_tensor_slice(c, starts4, ends4, NULL, steps4,
-    // 1); printf("1D slice with reverse step result:\n");
-    // MT_ASSERT_TEST("shape", mt_arr_same(res4->shape, MT_ARR_INT(5), 1,
-    // SZ_I)); MT_ASSERT_TEST(
-    //     "data", mt_arr_same(res4->data, MT_ARR_FLOAT(9, 7, 5, 3, 1), 5,
-    //     SZ_F));
-    // mt_tensor_free(b);
-    // mt_tensor_free(c);
-    // mt_tensor_free(res4);
+void test_concat(Stats *stats) {
+    MT_SECTION_TITLE("Basic 2D concat along axis 0");
+    mt_tensor *a        = mt_tensor_alloc_values(MT_ARR_INT(2, 3), 2,
+                                                 MT_ARR_FLOAT(1, 2, 3, 4, 5, 6));
+    mt_tensor *b        = mt_tensor_alloc_values(MT_ARR_INT(2, 3), 2,
+                                                 MT_ARR_FLOAT(7, 8, 9, 10, 11, 12));
+    mt_tensor *inputs[] = {a, b};
+    mt_tensor *res      = mt_concat(inputs, 2, 0);
+    MT_ASSERT_TEST("shape", mt_arr_same(res->shape, MT_ARR_INT(4, 3), 2, SZ_I));
+    MT_ASSERT_TEST(
+        "data", mt_arr_same(res->data,
+                            MT_ARR_FLOAT(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+                            12, SZ_F));
+    mt_tensor_free(a);
+    mt_tensor_free(b);
+    mt_tensor_free(res);
 
-    // MT_SECTION_TITLE("4D slice with partial axes");
-    // mt_tensor *d = mt_tensor_alloc_values(
-    //     MT_ARR_INT(2, 3, 4, 5), 4, NULL); // Initialize with sequential
-    //     values
-    // int        starts5[] = {0, 1};
-    // int        ends5[]   = {2, 3};
-    // int        axes5[]   = {1, 2};
-    // mt_tensor *res5      = mt_tensor_slice(d, starts5, ends5, axes5, NULL,
-    // 2); MT_ASSERT_TEST("shape",
-    //                mt_arr_same(res5->shape, MT_ARR_INT(2, 2, 2, 5), 4,
-    //                SZ_I));
-    // mt_tensor_free(d);
-    // mt_tensor_free(res5);
+    MT_SECTION_TITLE("2D concat along axis 1");
+    a         = mt_tensor_alloc_values(MT_ARR_INT(3, 2), 2,
+                                       MT_ARR_FLOAT(1, 2, 3, 4, 5, 6));
+    b         = mt_tensor_alloc_values(MT_ARR_INT(3, 2), 2,
+                                       MT_ARR_FLOAT(7, 8, 9, 10, 11, 12));
+    inputs[0] = a;
+    inputs[1] = b;
+    res       = mt_concat(inputs, 2, 1);
+    MT_ASSERT_TEST("shape", mt_arr_same(res->shape, MT_ARR_INT(3, 4), 2, SZ_I));
+    MT_ASSERT_TEST(
+        "data", mt_arr_same(res->data,
+                            MT_ARR_FLOAT(1, 2, 7, 8, 3, 4, 9, 10, 5, 6, 11, 12),
+                            12, SZ_F));
+    mt_tensor_free(a);
+    mt_tensor_free(b);
+    mt_tensor_free(res);
+
+    MT_SECTION_TITLE("3D concat along axis 1");
+    a         = mt_tensor_alloc_values(MT_ARR_INT(2, 2, 2), 3,
+                                       MT_ARR_FLOAT(1, 2, 3, 4, 5, 6, 7, 8));
+    b         = mt_tensor_alloc_values(MT_ARR_INT(2, 1, 2), 3,
+                                       MT_ARR_FLOAT(9, 10, 11, 12));
+    inputs[0] = a;
+    inputs[1] = b;
+    res       = mt_concat(inputs, 2, 1);
+    MT_ASSERT_TEST("shape",
+                   mt_arr_same(res->shape, MT_ARR_INT(2, 3, 2), 3, SZ_I));
+    MT_ASSERT_TEST(
+        "data", mt_arr_same(res->data,
+                            MT_ARR_FLOAT(1, 2, 3, 4, 9, 10, 5, 6, 7, 8, 11, 12),
+                            12, SZ_F));
+    mt_tensor_free(a);
+    mt_tensor_free(b);
+    mt_tensor_free(res);
+
+    MT_SECTION_TITLE("1D concat");
+    a = mt_tensor_alloc_values(MT_ARR_INT(3), 1, MT_ARR_FLOAT(1, 2, 3));
+    b = mt_tensor_alloc_values(MT_ARR_INT(2), 1, MT_ARR_FLOAT(4, 5));
+    mt_tensor *c = mt_tensor_alloc_values(MT_ARR_INT(1), 1, MT_ARR_FLOAT(6));
+    mt_tensor *inputs_1d[] = {a, b, c};
+    res                    = mt_concat(inputs_1d, 3, 0);
+    MT_ASSERT_TEST("shape", mt_arr_same(res->shape, MT_ARR_INT(6), 1, SZ_I));
+    MT_ASSERT_TEST(
+        "data",
+        mt_arr_same(res->data, MT_ARR_FLOAT(1, 2, 3, 4, 5, 6), 6, SZ_F));
+    mt_tensor_free(a);
+    mt_tensor_free(b);
+    mt_tensor_free(c);
+    mt_tensor_free(res);
+
+    MT_SECTION_TITLE("4D concat along axis 2");
+    a = mt_tensor_alloc_values(
+        MT_ARR_INT(2, 2, 2, 2), 4,
+        MT_ARR_FLOAT(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16));
+    b         = mt_tensor_alloc_values(MT_ARR_INT(2, 2, 1, 2), 4,
+                                       MT_ARR_FLOAT(17, 18, 19, 20, 21, 22, 23, 24));
+    inputs[0] = a;
+    inputs[1] = b;
+    res       = mt_concat(inputs, 2, 2);
+    MT_ASSERT_TEST("shape",
+                   mt_arr_same(res->shape, MT_ARR_INT(2, 2, 3, 2), 4, SZ_I));
+    MT_ASSERT_TEST(
+        "data",
+        mt_arr_same(res->data,
+                    MT_ARR_FLOAT(1, 2, 3, 4, 17, 18, 5, 6, 7, 8, 19, 20, 9, 10,
+                                 11, 12, 21, 22, 13, 14, 15, 16, 23, 24),
+                    24, SZ_F));
+
+    mt_tensor_free(a);
+    mt_tensor_free(b);
+    mt_tensor_free(res);
+
+    MT_SECTION_TITLE("2D concat with negative axis");
+    a         = mt_tensor_alloc_values(MT_ARR_INT(2, 3), 2,
+                                       MT_ARR_FLOAT(1, 2, 3, 4, 5, 6));
+    b         = mt_tensor_alloc_values(MT_ARR_INT(2, 3), 2,
+                                       MT_ARR_FLOAT(7, 8, 9, 10, 11, 12));
+    inputs[0] = a;
+    inputs[1] = b;
+    res       = mt_concat(inputs, 2, -2); // Equivalent to axis 0
+    MT_ASSERT_TEST("shape", mt_arr_same(res->shape, MT_ARR_INT(4, 3), 2, SZ_I));
+    MT_ASSERT_TEST(
+        "data", mt_arr_same(res->data,
+                            MT_ARR_FLOAT(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+                            12, SZ_F));
+    mt_tensor_free(a);
+    mt_tensor_free(b);
+    mt_tensor_free(res);
+
+    MT_SECTION_TITLE("2D concat with negative axis");
+    a         = mt_tensor_alloc_values(MT_ARR_INT(2, 3), 2,
+                                       MT_ARR_FLOAT(1, 2, 3, 4, 5, 6));
+    b         = mt_tensor_alloc_values(MT_ARR_INT(2, 3), 2,
+                                       MT_ARR_FLOAT(7, 8, 9, 10, 11, 12));
+    inputs[0] = a;
+    inputs[1] = b;
+    res       = mt_concat(inputs, 2, -2); // Equivalent to axis 0
+    MT_ASSERT_TEST("shape", mt_arr_same(res->shape, MT_ARR_INT(4, 3), 2, SZ_I));
+    MT_ASSERT_TEST(
+        "data", mt_arr_same(res->data,
+                            MT_ARR_FLOAT(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+                            12, SZ_F));
+    mt_tensor_free(a);
+    mt_tensor_free(b);
+    mt_tensor_free(res);
+
+    MT_SECTION_TITLE("2D concat with negative axis (along last dimension)");
+    a = mt_tensor_alloc_values(MT_ARR_INT(3, 2), 2,
+                               MT_ARR_FLOAT(1, 2, 3, 4, 5, 6));
+    b = mt_tensor_alloc_values(MT_ARR_INT(3, 1), 2, MT_ARR_FLOAT(7, 8, 9));
+    inputs[0] = a;
+    inputs[1] = b;
+    res       = mt_concat(inputs, 2, -1); // Equivalent to axis 1
+    MT_ASSERT_TEST("shape", mt_arr_same(res->shape, MT_ARR_INT(3, 3), 2, SZ_I));
+    MT_ASSERT_TEST("data", mt_arr_same(res->data,
+                                       MT_ARR_FLOAT(1, 2, 7, 3, 4, 8, 5, 6, 9),
+                                       9, SZ_F));
+    mt_tensor_free(a);
+    mt_tensor_free(b);
+    mt_tensor_free(res);
 }
 
 int main() {
@@ -240,6 +349,7 @@ int main() {
     test_binop(&s);
     test_permute_dim(&s);
     test_slice(&s);
+    test_concat(&s);
 
     printf("FAILED: %d, PASSED: %d\n", s.failed, s.pass);
     return 0;

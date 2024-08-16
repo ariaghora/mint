@@ -18,19 +18,24 @@ LayerKind = Enum(
         "UNKNOWN",
         "ADD",
         "AVG_POOL_2D",
+        "CAST",
+        "CONCAT",
         "CONV_2D",
         "DENSE",
         "DIV",
         "EXP",
         "FLATTEN",
         "GLOBAL_AVG_POOL",
+        "LEAKY_RELU",
         "LOCAL_RESPONSE_NORM",
+        "LOG",
         "MAX_POOL_2D",
         "MUL",
         "RELU",
         "RESHAPE",
         "SIGMOID",
         "SUB",
+        "TANH",
         "TRANSPOSE",
     ],
     start=0,
@@ -160,11 +165,19 @@ def write_layer_header(f: BufferedWriter, kind_val: int, node: Dict[str, Any]):
     np.array(node["outputs"], dtype=np.int32).tofile(f)
 
 
-def write_relu(
+def write_log(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
-    write_layer_header(f, LayerKind.RELU.value, node)
-    print(f"wrote Relu {id}")
+    write_layer_header(f, LayerKind.LOG.value, node)
+    print(f"wrote Log {id}")
+
+
+def write_leaky_relu(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.LEAKY_RELU.value, node)
+    np.array(node["attributes"].get("alpha", 0.01), dtype=np.float32).tofile(f)
+    print(f"wrote LeakyRelu {id}")
 
 
 def write_lrn(
@@ -313,6 +326,39 @@ def write_global_avg_pool(
     print(f"wrote GlobalAveragePool {id}")
 
 
+def write_relu(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.RELU.value, node)
+    print(f"wrote Relu {id}")
+
+
+def write_sigmoid(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.SIGMOID.value, node)
+    print(f"wrote Sigmoid {id}")
+
+
+def write_tanh(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.TANH.value, node)
+    print(f"wrote Tanh {id}")
+
+
+def write_transpose(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.TRANSPOSE.value, node)
+    perm = node["attributes"]["perm"]
+    ndim = len(perm)
+
+    np.array(ndim, dtype=np.int32).tofile(f)
+    np.array(perm, dtype=np.int32).tofile(f)
+    print(f"wrote Transpose {id}")
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("dump.py requires one argument, i.e., the ONNX model path")
@@ -347,20 +393,28 @@ if __name__ == "__main__":
                     write_avg_pool_2d(f, id, node, model["tensors"])
                 case "Conv":
                     write_conv(f, id, node, model["tensors"])
-                case "Constant":
-                    pass
                 case "Flatten":
                     write_flatten(f, id, node, model["tensors"])
                 case "Gemm":
                     write_dense(f, id, node, model["tensors"])
                 case "GlobalAveragePool":
                     write_global_avg_pool(f, id, node, model["tensors"])
+                case "LeakyRelu":
+                    write_leaky_relu(f, id, node, model["tensors"])
                 case "LRN":
                     write_lrn(f, id, node, model["tensors"])
+                case "Log":
+                    write_log(f, id, node, model["tensors"])
                 case "MaxPool":
                     write_max_pool(f, id, node, model["tensors"])
                 case "Relu":
                     write_relu(f, id, node, model["tensors"])
+                case "Sigmoid":
+                    write_sigmoid(f, id, node, model["tensors"])
+                case "Tanh":
+                    write_tanh(f, id, node, model["tensors"])
+                case "Transpose":
+                    write_transpose(f, id, node, model["tensors"])
                 case _:
                     if not node["op_type"] in err:
                         err.append(node["op_type"])
