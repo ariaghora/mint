@@ -23,6 +23,7 @@ LayerKind = Enum(
         "CONV_2D",
         "DENSE",
         "DIV",
+        "DROPOUT",
         "EXP",
         "FLATTEN",
         "GLOBAL_AVG_POOL",
@@ -34,6 +35,7 @@ LayerKind = Enum(
         "RELU",
         "RESHAPE",
         "SIGMOID",
+        "SOFTMAX",
         "SUB",
         "TANH",
         "TRANSPOSE",
@@ -243,6 +245,13 @@ def write_div(
     print(f"wrote Div {id}")
 
 
+def write_dropout(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.DROPOUT.value, node)
+    print("Currently dropout does not write any information")
+    print(f"wrote Dropout {id}")
+
 def write_exp(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
@@ -352,6 +361,12 @@ def write_sigmoid(
     write_layer_header(f, LayerKind.SIGMOID.value, node)
     print(f"wrote Sigmoid {id}")
 
+def write_softmax(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.SOFTMAX.value, node)
+    np.array(node["attributes"].get("axis", -1), dtype=np.int32).tofile(f)
+    print(f"wrote Softmax {id}")
 
 def write_tanh(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
@@ -402,6 +417,8 @@ if __name__ == "__main__":
                     write_mul(f, id, node, model["tensors"])
                 case "Div":
                     write_div(f, id, node, model["tensors"])
+                case "Dropout":
+                    write_dropout(f, id, node, model["tensors"])
                 case "Exp":
                     write_exp(f, id, node, model["tensors"])
                 case "AveragePool":
@@ -428,6 +445,8 @@ if __name__ == "__main__":
                     write_reshape(f, id, node, model["tensors"])
                 case "Sigmoid":
                     write_sigmoid(f, id, node, model["tensors"])
+                case "Softmax":
+                    write_softmax(f, id, node, model["tensors"])
                 case "Tanh":
                     write_tanh(f, id, node, model["tensors"])
                 case "Transpose":

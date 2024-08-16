@@ -341,6 +341,25 @@ void test_concat(Stats *stats) {
     mt_tensor_free(a);
     mt_tensor_free(b);
     mt_tensor_free(res);
+
+    MT_SECTION_TITLE("2D concat with varying sizes on concat axis");
+    a = mt_tensor_alloc_values(MT_ARR_INT(3, 2), 2,
+                               MT_ARR_FLOAT(1, 2, 3, 4, 5, 6));
+    b = mt_tensor_alloc_values(MT_ARR_INT(3, 3), 2,
+                               MT_ARR_FLOAT(7, 8, 9, 10, 11, 12, 13, 14, 15));
+    c = mt_tensor_alloc_values(MT_ARR_INT(3, 1), 2, MT_ARR_FLOAT(16, 17, 18));
+    mt_tensor *inputs_varying[] = {a, b, c};
+    res = mt_concat(inputs_varying, 3, 1); // Concatenate along axis 1
+    MT_ASSERT_TEST("shape", mt_arr_same(res->shape, MT_ARR_INT(3, 6), 2, SZ_I));
+    MT_ASSERT_TEST("data",
+                   mt_arr_same(res->data,
+                               MT_ARR_FLOAT(1, 2, 7, 8, 9, 16, 3, 4, 10, 11, 12,
+                                            17, 5, 6, 13, 14, 15, 18),
+                               18, SZ_F));
+    mt_tensor_free(a);
+    mt_tensor_free(b);
+    mt_tensor_free(c);
+    mt_tensor_free(res);
 }
 
 int main() {

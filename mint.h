@@ -215,6 +215,8 @@ mt_tensor *mt_global_avg_pool_2d(mt_tensor *x);
 mt_tensor *mt_image_resize(mt_tensor *t, int target_height, int target_width);
 // Standardize tensor RGB image. Both mu and std must have 3 elements.
 void       mt_image_standardize(mt_tensor *t, mt_float *mu, mt_float *std);
+// Leaky relu
+void       mt_leaky_relu_inplace(mt_tensor *t, mt_float alpha);
 // Local response norm, as introduced in AlexNet paper
 mt_tensor *mt_local_response_norm(mt_tensor *t, int size, mt_float alpha,
                                   mt_float beta, mt_float k);
@@ -275,6 +277,7 @@ typedef enum {
     MT_LAYER_CONV_2D,
     MT_LAYER_DENSE,
     MT_LAYER_DIV,
+    MT_LAYER_DROPOUT,
     MT_LAYER_EXP,
     MT_LAYER_FLATTEN,
     MT_LAYER_GLOBAL_AVG_POOL,
@@ -286,6 +289,7 @@ typedef enum {
     MT_LAYER_RELU,
     MT_LAYER_RESHAPE,
     MT_LAYER_SIGMOID,
+    MT_LAYER_SOFTMAX,
     MT_LAYER_SUB,
     MT_LAYER_TANH,
     MT_LAYER_TRANSPOSE,
@@ -367,6 +371,11 @@ typedef struct {
         struct {
             int axis;
         } flatten;
+        //
+        // MT_LAYER_LEAKY_RELU
+        struct {
+            mt_float alpha;
+        } leaky_relu;
 
         // MT_LAYER_LOCAL_RESPONSE_NORM
         struct {
@@ -382,6 +391,11 @@ typedef struct {
             int stride;
             int pad;
         } max_pool_2d;
+
+        // MT_LAYER_SOFTMAX
+        struct {
+            int axis;
+        } softmax;
 
         // MT_LAYER_TRANSPOSE
         struct {
@@ -499,8 +513,8 @@ static int mt__product(const int *arr, int n) {
 }
 
 mt_tensor *mt_adaptive_avg_pool_2d(mt_tensor *x, int out_h, int out_w) {
-    MT_ASSERT_F(x->ndim == 3,
-                "input tensor must have 3 dimensions (an image), found %d",
+    MT_ASSERT_F(x->ndim == 4,
+                "input tensor must have 4 dimensions (an image), found %d",
                 x->ndim);
 
     int   channels = x->shape[0];
@@ -733,7 +747,7 @@ mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b) {
 
 mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride,
                           int *pads) {
-    MT_ASSERT(x->ndim == 3, "Input tensor must be 3-dimensional");
+    MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional");
     int C    = x->shape[0];
     int H_in = x->shape[1];
     int W_in = x->shape[2];
@@ -831,7 +845,7 @@ mt_tensor *mt_concat(mt_tensor **inputs, int num_inputs, int axis) {
 }
 mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
                           int *pads) {
-    MT_ASSERT(x->ndim == 3, "Input tensor must be 3-dimensional");
+    MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional");
     MT_ASSERT(w->ndim == 4, "Weight tensor must be 4-dimensional");
     MT_ASSERT(b->ndim == 1, "Bias tensor must be 1-dimensional");
     MT_ASSERT(x->shape[0] == w->shape[1],
@@ -1012,7 +1026,7 @@ static mt_float mt__s_exp(mt_float x) { return exp(x); }
 mt_tensor      *mt_exp(mt_tensor *t) { return mt__unop(t, mt__s_exp); }
 
 mt_tensor *mt_global_avg_pool_2d(mt_tensor *x) {
-    MT_ASSERT(x->ndim == 3, "Input tensor must be 3-dimensional");
+    MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional");
     int C = x->shape[0];
     int H = x->shape[1];
     int W = x->shape[2];
@@ -1037,8 +1051,8 @@ mt_tensor *mt_global_avg_pool_2d(mt_tensor *x) {
 
 mt_tensor *mt_image_resize(mt_tensor *img, int target_height,
                            int target_width) {
-    MT_ASSERT(img->ndim == 3,
-              "Input tensor must be 3-dimensional (CHW format)");
+    MT_ASSERT(img->ndim == 4,
+              "Input tensor must be 4-dimensional (NCHW format)");
 
     int channels   = img->shape[0];
     int src_height = img->shape[1];
@@ -1112,7 +1126,7 @@ mt_tensor *mt_image_resize(mt_tensor *img, int target_height,
 }
 
 void mt_image_standardize(mt_tensor *t, mt_float *mu, mt_float *std) {
-    MT_ASSERT(t->ndim == 3, "");
+    MT_ASSERT(t->ndim == 4, "input must be 4 dimensional");
     int h = t->shape[1];
     int w = t->shape[2];
     for (int c = 0; c < 3; ++c) {
@@ -1125,12 +1139,50 @@ void mt_image_standardize(mt_tensor *t, mt_float *mu, mt_float *std) {
     }
 }
 
+void mt_leaky_relu_inplace(mt_tensor *t, mt_float alpha) {
+    for (int i = 0; i < mt_tensor_count_element(t); ++i) {
+        t->data[i] = t->data[i] < 0 ? alpha * t->data[i] : t->data[i];
+    }
+}
+mt_tensor *mt_local_response_norm(mt_tensor *t, int size, mt_float alpha,
+                                  mt_float beta, mt_float k) {
+    MT_ASSERT(t->ndim == 4, "Input tensor must be 4-dimensional (CHW format)");
+    MT_ASSERT(size % 2 == 1, "Size must be odd");
+
+    int C = t->shape[0];
+    int H = t->shape[1];
+    int W = t->shape[2];
+
+    mt_tensor *output = mt_tensor_alloc(t->shape, t->ndim);
+
+    for (int c = 0; c < C; c++) {
+        for (int h = 0; h < H; h++) {
+            for (int w = 0; w < W; w++) {
+                mt_float sum   = 0.0f;
+                int      start = (c - size / 2 > 0) ? c - size / 2 : 0;
+                int      end   = (c + size / 2 < C) ? c + size / 2 : C - 1;
+
+                for (int i = start; i <= end; i++) {
+                    mt_float val = t->data[(i * H + h) * W + w];
+                    sum += val * val;
+                }
+
+                mt_float x = t->data[(c * H + h) * W + w];
+                output->data[(c * H + h) * W + w] =
+                    x / powf(k + alpha * sum / size, beta);
+            }
+        }
+    }
+
+    return output;
+}
+
 mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b) {
     return mt__matmul_backend(a, b);
 }
 
 mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int pad) {
-    MT_ASSERT(x->ndim == 3, "");
+    MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional (CHW format)");
 
     int C    = x->shape[0];
     int H_in = x->shape[1];
@@ -1536,10 +1588,15 @@ void mt_tensor_debug_info(mt_tensor *t) {
     printf("data : [");
     long len = mt_tensor_count_element(t);
     for (int i = 0; i < len; ++i) {
-        printf("%f", t->data[i]);
-        if (i < len - 1)
-            printf(", ");
+        if (i <= 10) {
+            printf("%f", t->data[i]);
+            if (i < len - 1)
+                printf(", ");
+        }
     }
+    if (len > 10)
+        printf(" ...");
+    printf("]\n");
 }
 
 mt_tensor *mt_tensor_fread(FILE *fp) {
@@ -1665,6 +1722,13 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             mt_reader_read(&layer->data.avg_pool_2d.pads, sizeof(int), 1, &mp);
         } else if (layer->kind == MT_LAYER_CONCAT) {
             mt_reader_read(&layer->data.concat.axis, sizeof(int), 1, &mp);
+            // if (input_in_batch) {
+            //     DEBUG_LOG_F("Input is in batch but only a single sample is "
+            //                 "considered. Changing axis %d to %d",
+            //                 layer->data.concat.axis,
+            //                 layer->data.concat.axis - 1);
+            //     layer->data.concat.axis--;
+            // }
         } else if (layer->kind == MT_LAYER_CONV_2D) {
             mt_reader_read(&layer->data.conv_2d.stride, sizeof(int), 1, &mp);
             mt_reader_read(&layer->data.conv_2d.pads, sizeof(int), 4, &mp);
@@ -1681,6 +1745,9 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             int b_idx                = layer->inputs[2];
             layer->data.conv_2d.b_id = b_idx;
             model->tensors[b_idx]    = mt_tensor_memread(&mp);
+        } else if (layer->kind == MT_LAYER_DROPOUT) {
+            // nothing to read
+            DEBUG_LOG_F("currently no information is written for dropout", "");
         } else if (layer->kind == MT_LAYER_EXP) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_LOCAL_RESPONSE_NORM) {
@@ -1705,17 +1772,26 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             mt_reader_read(&layer->data.flatten.axis, sizeof(int), 1, &mp);
 
             // if model input is in batch, axis should be decreased by one
-            if (input_in_batch) {
-                DEBUG_LOG_F("Input is in batch but only a single sa&mple is "
-                            "considered. Changing axis %d to %d",
-                            layer->data.flatten.axis,
-                            layer->data.flatten.axis - 1);
-                layer->data.flatten.axis--;
-            }
+            // if (input_in_batch) {
+            //     DEBUG_LOG_F("Input is in batch but only a single sample is "
+            //                 "considered. Changing axis %d to %d",
+            //                 layer->data.flatten.axis,
+            //                 layer->data.flatten.axis - 1);
+            //     layer->data.flatten.axis--;
+            // }
         } else if (layer->kind == MT_LAYER_GLOBAL_AVG_POOL) {
             // nothing to read
+        } else if (layer->kind == MT_LAYER_LEAKY_RELU) {
+            mt_reader_read(&layer->data.leaky_relu.alpha, sizeof(mt_float), 1,
+                           &mp);
         } else if (layer->kind == MT_LAYER_RELU) {
             // nothing to read
+        } else if (layer->kind == MT_LAYER_RESHAPE) {
+            // nothing to read; the shape will be an input tensor
+        } else if (layer->kind == MT_LAYER_SIGMOID) {
+            // nothing to read
+        } else if (layer->kind == MT_LAYER_SOFTMAX) {
+            mt_reader_read(&layer->data.softmax.axis, sizeof(int), 1, &mp);
         } else if (layer->kind == MT_LAYER_TANH) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_TRANSPOSE) {
@@ -1831,6 +1907,18 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         model->tensors[l->outputs[0]] = res;
         break;
     }
+    case MT_LAYER_CONCAT: {
+        mt_tensor *inputs[l->input_count];
+        for (int i = 0; i < l->input_count; ++i) {
+            inputs[i] = model->tensors[l->inputs[i]];
+            mt_tensor_debug_info(inputs[i]);
+        }
+
+        res = mt_concat(inputs, l->input_count, l->data.concat.axis);
+        mt_tensor_debug_info(res);
+        model->tensors[l->outputs[0]] = res;
+        break;
+    }
     case MT_LAYER_CONV_2D: {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res = mt_convolve_2d(input, model->tensors[l->data.conv_2d.w_id],
@@ -1883,6 +1971,15 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
     case MT_LAYER_GLOBAL_AVG_POOL: {
         mt_tensor *input              = model->tensors[l->inputs[0]];
         res                           = mt_global_avg_pool_2d(input);
+        model->tensors[l->outputs[0]] = res;
+        break;
+    }
+    case MT_LAYER_LOCAL_RESPONSE_NORM: {
+        mt_tensor *input = model->tensors[l->inputs[0]];
+        res = mt_local_response_norm(input, l->data.local_response_norm.size,
+                                     l->data.local_response_norm.alpha,
+                                     l->data.local_response_norm.beta,
+                                     l->data.local_response_norm.bias);
         model->tensors[l->outputs[0]] = res;
         break;
     }
