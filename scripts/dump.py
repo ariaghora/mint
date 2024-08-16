@@ -214,6 +214,14 @@ def write_add(
     print(f"wrote Add {id}")
 
 
+def write_concat(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.CONCAT.value, node)
+    np.array(node["attributes"]["axis"], dtype=np.int32).tofile(f)
+    print(f"wrote Concat {id}")
+
+
 def write_sub(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
@@ -332,6 +340,11 @@ def write_relu(
     write_layer_header(f, LayerKind.RELU.value, node)
     print(f"wrote Relu {id}")
 
+def write_reshape(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.RESHAPE.value, node)
+    print(f"wrote Reshape {id}")
 
 def write_sigmoid(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
@@ -381,6 +394,8 @@ if __name__ == "__main__":
                 # Simple binop
                 case "Add":
                     write_add(f, id, node, model["tensors"])
+                case "Concat":
+                    write_concat(f, id, node, model["tensors"])
                 case "Sub":
                     write_sub(f, id, node, model["tensors"])
                 case "Mul":
@@ -409,6 +424,8 @@ if __name__ == "__main__":
                     write_max_pool(f, id, node, model["tensors"])
                 case "Relu":
                     write_relu(f, id, node, model["tensors"])
+                case "Reshape":
+                    write_reshape(f, id, node, model["tensors"])
                 case "Sigmoid":
                     write_sigmoid(f, id, node, model["tensors"])
                 case "Tanh":

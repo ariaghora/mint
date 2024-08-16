@@ -314,7 +314,7 @@ void       mt_model_set_input(mt_model *model, const char *name, mt_tensor *t);
 #define MAX_LAYER_OUTPUT_COUNT 10
 #define MAX_LAYER_PREV_COUNT 5
 #define MAX_LAYER_NEXT_COUNT 5
-#define MAX_MODEL_INITIALIZER_COUNT 1000
+#define MAX_MODEL_INITIALIZER_COUNT 1500
 #define MAX_TENSOR_NDIM 5
 #define MAX_INPUT_OUTPUT_COUNT 5
 #define MAX_INPUT_OUTPUT_NAME_LEN 50
@@ -343,6 +343,11 @@ typedef struct {
             int pads[4];
             int group;
         } avg_pool_2d;
+
+        // MT_LAYER_CONCAT
+        struct {
+            int axis;
+        } concat;
 
         // MT_LAYER_CONV_2D
         struct {
@@ -1658,6 +1663,8 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             mt_reader_read(&layer->data.avg_pool_2d.stride, sizeof(int), 1,
                            &mp);
             mt_reader_read(&layer->data.avg_pool_2d.pads, sizeof(int), 1, &mp);
+        } else if (layer->kind == MT_LAYER_CONCAT) {
+            mt_reader_read(&layer->data.concat.axis, sizeof(int), 1, &mp);
         } else if (layer->kind == MT_LAYER_CONV_2D) {
             mt_reader_read(&layer->data.conv_2d.stride, sizeof(int), 1, &mp);
             mt_reader_read(&layer->data.conv_2d.pads, sizeof(int), 4, &mp);
@@ -1674,6 +1681,8 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             int b_idx                = layer->inputs[2];
             layer->data.conv_2d.b_id = b_idx;
             model->tensors[b_idx]    = mt_tensor_memread(&mp);
+        } else if (layer->kind == MT_LAYER_EXP) {
+            // nothing to read
         } else if (layer->kind == MT_LAYER_LOCAL_RESPONSE_NORM) {
             mt_reader_read(&layer->data.local_response_norm.size, sizeof(int),
                            1, &mp);
@@ -1690,6 +1699,8 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             mt_reader_read(&layer->data.max_pool_2d.stride, sizeof(int), 1,
                            &mp);
             mt_reader_read(&layer->data.max_pool_2d.pad, sizeof(int), 4, &mp);
+        } else if (layer->kind == MT_LAYER_MUL) {
+            // nothing to read
         } else if (layer->kind == MT_LAYER_FLATTEN) {
             mt_reader_read(&layer->data.flatten.axis, sizeof(int), 1, &mp);
 
@@ -1704,6 +1715,8 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
         } else if (layer->kind == MT_LAYER_GLOBAL_AVG_POOL) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_RELU) {
+            // nothing to read
+        } else if (layer->kind == MT_LAYER_TANH) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_TRANSPOSE) {
             int ndim;
