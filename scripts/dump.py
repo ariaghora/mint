@@ -346,6 +346,8 @@ if __name__ == "__main__":
                     write_avg_pool_2d(f, id, node, model["tensors"])
                 case "Conv":
                     write_conv(f, id, node, model["tensors"])
+                case "Constant":
+                    pass
                 case "Flatten":
                     write_flatten(f, id, node, model["tensors"])
                 case "Gemm":

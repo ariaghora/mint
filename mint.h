@@ -222,8 +222,6 @@ mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b);
 mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int pad);
 // Element-wise multiplication
 mt_tensor *mt_mul(mt_tensor *a, mt_tensor *b);
-// Swap tensor's dimensions
-mt_tensor *mt_permute_dims(mt_tensor *a, int *dims);
 // Relu activation function, in-place version.
 void       mt_relu_inplace(mt_tensor *t);
 // Element-wise subtraction
@@ -252,6 +250,11 @@ void       mt_tensor_free(mt_tensor *t);
 // Load image as a tensor with shape of CxHxW. C is the number of channel, H
 // is the image height, and W is the image width.
 mt_tensor *mt_tensor_load_image(char *filename);
+// Swap tensor's dimensions
+mt_tensor *mt_tensor_permute_dims(mt_tensor *t, int *dims);
+// Tensor slice
+mt_tensor *mt_tensor_slice(mt_tensor *t, int *starts, int *ends, int *axes,
+                           int *steps, int num_axes);
 // Reshape tensor in-place. The old and new shape should be compatible.
 void mt_tensor_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim);
 
@@ -293,6 +296,7 @@ void       mt_model_set_input(mt_model *model, const char *name, mt_tensor *t);
 
 #ifdef MT_IMPLEMENTATION
 
+#include <limits.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -1253,7 +1257,7 @@ mt_tensor *mt__permute_4d(mt_tensor *input, const int *dims) {
 }
 
 // Main permute function that selects the appropriate implementation
-mt_tensor *mt_permute_dims(mt_tensor *t, int *dims) {
+mt_tensor *mt_tensor_permute_dims(mt_tensor *t, int *dims) {
     switch (t->ndim) {
     case 2:
         return mt__permute_2d(t, dims);
@@ -1277,6 +1281,110 @@ void        mt_relu_inplace(mt_tensor *t) {
 static mt_float mt__s_sub(mt_float a, mt_float b) { return a - b; }
 mt_tensor      *mt_sub(mt_tensor *a, mt_tensor *b) {
     return mt__binop(a, b, mt__s_sub);
+}
+
+// Helper function to handle negative indices and clamping
+static int adjust_index(int index, int dim, int step) {
+    if (index < 0) {
+        index += dim;
+    }
+    if (step > 0) {
+        return (index < 0) ? 0 : (index > dim) ? dim : index;
+    } else {
+        return (index < -1) ? -1 : (index >= dim) ? (dim - 1) : index;
+    }
+}
+
+mt_tensor *mt_tensor_slice(mt_tensor *input, int *starts, int *ends, int *axes,
+                           int *steps, int num_axes) {
+    int rank = input->ndim;
+    int effective_starts[MAX_TENSOR_NDIM], effective_ends[MAX_TENSOR_NDIM],
+        effective_steps[MAX_TENSOR_NDIM];
+    int output_shape[MAX_TENSOR_NDIM];
+
+    for (int i = 0; i < num_axes; ++i) {
+        MT_ASSERT_F(
+            steps[i] >= 0,
+            "cannot slice with negative steps, but step on axis %d is %d",
+            axes[i], steps[i]);
+    }
+
+    // Initialize effective values
+    for (int i = 0; i < rank; i++) {
+        effective_starts[i] = 0;
+        effective_ends[i]   = input->shape[i];
+        effective_steps[i]  = 1;
+    }
+
+    // Adjust starts, ends, and steps based on provided axes
+    for (int i = 0; i < num_axes; i++) {
+        int axis = (axes != NULL) ? axes[i] : i;
+        if (axis < 0)
+            axis += rank;
+
+        effective_starts[axis] =
+            adjust_index(starts[i], input->shape[axis], steps ? steps[i] : 1);
+        effective_ends[axis] =
+            adjust_index(ends[i], input->shape[axis], steps ? steps[i] : 1);
+        effective_steps[axis] = steps ? steps[i] : 1;
+
+        // Handle INT_MAX and INT_MIN for ends
+        if (ends[i] == INT_MAX)
+            effective_ends[axis] = input->shape[axis];
+        if (ends[i] == INT_MIN)
+            effective_ends[axis] = -1;
+
+        // Calculate output shape
+        int slice_length = (effective_ends[axis] - effective_starts[axis] +
+                            effective_steps[axis] - 1) /
+                           effective_steps[axis];
+        output_shape[axis] = (slice_length < 0) ? 0 : slice_length;
+    }
+
+    // Allocate output tensor
+    mt_tensor *output = mt_tensor_alloc(output_shape, rank);
+
+    // Perform slicing
+    int input_indices[MAX_TENSOR_NDIM]  = {0};
+    int output_indices[MAX_TENSOR_NDIM] = {0};
+    int total_elements                  = 1;
+    for (int i = 0; i < rank; i++) {
+        total_elements *= output_shape[i];
+    }
+
+    for (int i = 0; i < total_elements; i++) {
+        // Calculate input indices
+        for (int j = 0; j < rank; j++) {
+            input_indices[j] =
+                effective_starts[j] + output_indices[j] * effective_steps[j];
+        }
+
+        // Copy data
+        int input_flat_index  = 0;
+        int output_flat_index = 0;
+        int input_stride      = 1;
+        int output_stride     = 1;
+
+        for (int j = rank - 1; j >= 0; j--) {
+            input_flat_index += input_indices[j] * input_stride;
+            output_flat_index += output_indices[j] * output_stride;
+            input_stride *= input->shape[j];
+            output_stride *= output_shape[j];
+        }
+
+        output->data[output_flat_index] = input->data[input_flat_index];
+
+        // Update output indices
+        for (int j = rank - 1; j >= 0; j--) {
+            output_indices[j]++;
+            if (output_indices[j] < output_shape[j]) {
+                break;
+            }
+            output_indices[j] = 0;
+        }
+    }
+
+    return output;
 }
 
 void mt_tensor_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim) {
@@ -1348,6 +1456,13 @@ void mt_tensor_debug_info(mt_tensor *t) {
             printf(", ");
     }
     printf("]\n");
+    printf("data : [");
+    long len = mt_tensor_count_element(t);
+    for (int i = 0; i < len; ++i) {
+        printf("%f", t->data[i]);
+        if (i < len - 1)
+            printf(", ");
+    }
 }
 
 mt_tensor *mt_tensor_fread(FILE *fp) {
