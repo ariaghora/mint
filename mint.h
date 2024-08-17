@@ -281,36 +281,78 @@ void       mt_tensor_unsqueeze_inplace(mt_tensor *t, int axis);
 
 typedef struct mt_model mt_model;
 
+// typedef enum {
+//     MT_LAYER_UNKNOWN,
+//     MT_LAYER_ADD,
+//     MT_LAYER_AVG_POOL_2D,
+//     MT_LAYER_CAST, // ignored
+//     MT_LAYER_CONCAT,
+//     MT_LAYER_CONSTANT,
+//     MT_LAYER_CONV_2D,
+//     MT_LAYER_DENSE,
+//     MT_LAYER_DIV,
+//     MT_LAYER_DROPOUT,
+//     MT_LAYER_EXP,
+//     MT_LAYER_FLATTEN,
+//     MT_LAYER_GLOBAL_AVG_POOL,
+//     MT_LAYER_INSTANCE_NORMALIZATION,
+//     MT_LAYER_LEAKY_RELU,
+//     MT_LAYER_LOCAL_RESPONSE_NORM,
+//     MT_LAYER_LOG,
+//     MT_LAYER_MAX_POOL_2D,
+//     MT_LAYER_MUL,
+//     MT_LAYER_PAD,
+//     MT_LAYER_RELU,
+//     MT_LAYER_RESHAPE,
+//     MT_LAYER_RESIZE,
+//     MT_LAYER_SIGMOID,
+//     MT_LAYER_SOFTMAX,
+//     MT_LAYER_SUB,
+//     MT_LAYER_TANH,
+//     MT_LAYER_TRANSPOSE,
+// } mt_layer_kind;
+
+#define LAYER_TYPES(X)                                                         \
+    X(MT_LAYER_UNKNOWN)                                                        \
+    X(MT_LAYER_ADD)                                                            \
+    X(MT_LAYER_AVG_POOL_2D)                                                    \
+    X(MT_LAYER_CAST)                                                           \
+    X(MT_LAYER_CONCAT)                                                         \
+    X(MT_LAYER_CONSTANT)                                                       \
+    X(MT_LAYER_CONV_2D)                                                        \
+    X(MT_LAYER_DENSE)                                                          \
+    X(MT_LAYER_DIV)                                                            \
+    X(MT_LAYER_DROPOUT)                                                        \
+    X(MT_LAYER_EXP)                                                            \
+    X(MT_LAYER_FLATTEN)                                                        \
+    X(MT_LAYER_GLOBAL_AVG_POOL)                                                \
+    X(MT_LAYER_INSTANCE_NORMALIZATION)                                         \
+    X(MT_LAYER_LEAKY_RELU)                                                     \
+    X(MT_LAYER_LOCAL_RESPONSE_NORM)                                            \
+    X(MT_LAYER_LOG)                                                            \
+    X(MT_LAYER_MAX_POOL_2D)                                                    \
+    X(MT_LAYER_MUL)                                                            \
+    X(MT_LAYER_PAD)                                                            \
+    X(MT_LAYER_RELU)                                                           \
+    X(MT_LAYER_RESHAPE)                                                        \
+    X(MT_LAYER_RESIZE)                                                         \
+    X(MT_LAYER_SIGMOID)                                                        \
+    X(MT_LAYER_SOFTMAX)                                                        \
+    X(MT_LAYER_SUB)                                                            \
+    X(MT_LAYER_TANH)                                                           \
+    X(MT_LAYER_TRANSPOSE)
+
 typedef enum {
-    MT_LAYER_UNKNOWN,
-    MT_LAYER_ADD,
-    MT_LAYER_AVG_POOL_2D,
-    MT_LAYER_CAST, // ignored
-    MT_LAYER_CONCAT,
-    MT_LAYER_CONSTANT,
-    MT_LAYER_CONV_2D,
-    MT_LAYER_DENSE,
-    MT_LAYER_DIV,
-    MT_LAYER_DROPOUT,
-    MT_LAYER_EXP,
-    MT_LAYER_FLATTEN,
-    MT_LAYER_GLOBAL_AVG_POOL,
-    MT_LAYER_INSTANCE_NORMALIZATION,
-    MT_LAYER_LEAKY_RELU,
-    MT_LAYER_LOCAL_RESPONSE_NORM,
-    MT_LAYER_LOG,
-    MT_LAYER_MAX_POOL_2D,
-    MT_LAYER_MUL,
-    MT_LAYER_PAD,
-    MT_LAYER_RELU,
-    MT_LAYER_RESHAPE,
-    MT_LAYER_RESIZE,
-    MT_LAYER_SIGMOID,
-    MT_LAYER_SOFTMAX,
-    MT_LAYER_SUB,
-    MT_LAYER_TANH,
-    MT_LAYER_TRANSPOSE,
+#define X(name) name,
+    LAYER_TYPES(X)
+#undef X
 } mt_layer_kind;
+
+static const char *mt_layer_kind_strings[] = {
+#define X(name) #name,
+    LAYER_TYPES(X)
+#undef X
+};
 
 mt_model  *mt_model_load(const char *filename, int input_in_batch);
 void       mt_model_free(mt_model *model);
@@ -319,6 +361,7 @@ void       mt_model_run(mt_model *model);
 void       mt_model_set_input(mt_model *model, const char *name, mt_tensor *t);
 
 typedef struct mt_layer mt_layer;
+const char             *mt_layer_kind_to_string(mt_layer_kind kind);
 
 void mt_layer_debug_info(mt_layer *l);
 
@@ -726,8 +769,8 @@ mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
         int numel = mt_tensor_count_element(result);
 
 #pragma omp parallel for
-        // TODO: optimize for special ndims, identic shape, and tensor-scalar
-        // ops
+        // TODO: optimize for special ndims, identic shape, and
+        // tensor-scalar ops
         for (int i = 0; i < numel; i++) {
             int indices[MAX_TENSOR_NDIM];
             int temp = i;
@@ -2115,10 +2158,10 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
         } else if (layer->kind == MT_LAYER_TRANSPOSE) {
             int ndim;
             mt_reader_read(&ndim, sizeof(int), 1, &mp);
-            MT_ASSERT_F(
-                ndim <= MAX_TENSOR_NDIM,
-                "input ndim (%d) exceeds maximum allowed tensor dimension (%d)",
-                ndim, MAX_TENSOR_NDIM);
+            MT_ASSERT_F(ndim <= MAX_TENSOR_NDIM,
+                        "input ndim (%d) exceeds maximum allowed tensor "
+                        "dimension (%d)",
+                        ndim, MAX_TENSOR_NDIM);
             mt_reader_read(&layer->data.transpose, sizeof(int), ndim, &mp);
         } else {
             if (layer->kind == MT_LAYER_UNKNOWN) {
@@ -2205,9 +2248,16 @@ void mt__toposort(mt_layer *l, mt_model *model, int *sorted_ids,
     *sorted_len             = *sorted_len + 1;
 }
 
+const char *mt_layer_kind_to_string(mt_layer_kind kind) {
+    if (kind >= 0 && kind < sizeof(mt_layer_kind_strings) /
+                                sizeof(mt_layer_kind_strings[0])) {
+        return mt_layer_kind_strings[kind];
+    }
+    return "UNKNOWN_LAYER_KIND";
+}
+
 void mt__layer_forward(mt_layer *l, mt_model *model) {
     mt_tensor *res = NULL;
-    DEBUG_LOG_F("executing layer id %d (type %d)", l->id, l->kind);
 
     switch (l->kind) {
     case MT_LAYER_ADD: {
@@ -2481,6 +2531,9 @@ void mt_model_run(mt_model *model) {
     // Execute forward
     for (int i = 0; i < *sorted_len_ptr; ++i) {
         mt_layer *l = model->layers[sorted_ids[i]];
+
+        DEBUG_LOG_F("[%d/%d] executing layer id %d (type %s)", i + 1,
+                    *sorted_len_ptr, l->id, mt_layer_kind_to_string(l->kind));
         mt__layer_forward(l, model);
     }
 
