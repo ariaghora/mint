@@ -32,6 +32,7 @@ LayerKind = Enum(
         "LOG",
         "MAX_POOL_2D",
         "MUL",
+        "PAD",
         "RELU",
         "RESHAPE",
         "SIGMOID",
@@ -343,6 +344,12 @@ def write_global_avg_pool(
     write_layer_header(f, LayerKind.GLOBAL_AVG_POOL.value, node)
     print(f"wrote GlobalAveragePool {id}")
 
+def write_pad(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    print(node)
+    write_layer_header(f, LayerKind.PAD.value, node)
+    print(f"wrote Pad {id}")
 
 def write_relu(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
@@ -444,6 +451,8 @@ if __name__ == "__main__":
                     write_log(f, id, node, model["tensors"])
                 case "MaxPool":
                     write_max_pool(f, id, node, model["tensors"])
+                case "Pad":
+                    write_pad(f, id, node, model["tensors"])
                 case "Relu":
                     write_relu(f, id, node, model["tensors"])
                 case "Reshape":

@@ -187,6 +187,12 @@ extern "C" {
 
 typedef struct mt_tensor mt_tensor;
 
+typedef enum {
+    MT_PAD_REFLECT,
+    MT_PAD_CONSTANT,
+    MT_PAD_EDGE,
+} mt_pad_mode;
+
 // Adaptive version of average pooling. This typically allows the use of any
 // arbitrary input size to obtain consistent size for the intermediate layer
 // representation.
@@ -254,6 +260,9 @@ void       mt_tensor_free(mt_tensor *t);
 // Load image as a tensor with shape of CxHxW. C is the number of channel, H
 // is the image height, and W is the image width.
 mt_tensor *mt_tensor_load_image(char *filename);
+// Pad along tensor's dimension
+mt_tensor *mt_tensor_pad(mt_tensor *t, int *pads, mt_pad_mode mode,
+                         mt_float constant_val);
 // Swap tensor's dimensions
 mt_tensor *mt_tensor_permute_dims(mt_tensor *t, int *dims);
 // Reshape tensor in-place. The old and new shape should be compatible.
@@ -287,6 +296,7 @@ typedef enum {
     MT_LAYER_LOG,
     MT_LAYER_MAX_POOL_2D,
     MT_LAYER_MUL,
+    MT_LAYER_PAD,
     MT_LAYER_RELU,
     MT_LAYER_RESHAPE,
     MT_LAYER_SIGMOID,
@@ -1303,6 +1313,146 @@ mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int *pads) {
     }
 
     return output;
+}
+
+mt_tensor *mt_tensor_pad(mt_tensor *t, int *pads, mt_pad_mode mode,
+                         mt_float constant_val) {
+    MT_ASSERT(t->ndim <= 4, "Input tensor must have 4 or fewer dimensions");
+
+    switch (mode) {
+    case MT_PAD_REFLECT: {
+        // Calculate new dimensions
+        int new_dims[4] = {0};
+        for (int i = 0; i < t->ndim; i++) {
+            new_dims[i] = t->shape[i] + pads[i] + pads[i + t->ndim];
+        }
+
+        // Allocate new tensor
+        mt_tensor *padded = mt_tensor_alloc(new_dims, t->ndim);
+
+        // Pad the tensor
+        switch (t->ndim) {
+        case 1: {
+            for (int i = 0; i < new_dims[0]; i++) {
+                int idx = i - pads[0];
+                if (idx < 0)
+                    idx = -idx;
+                else if (idx >= t->shape[0])
+                    idx = 2 * t->shape[0] - 2 - idx;
+                padded->data[i] = t->data[idx];
+            }
+            break;
+        }
+        case 2: {
+            int h = t->shape[0], w = t->shape[1];
+            int new_h = new_dims[0], new_w = new_dims[1];
+            int pad_top = pads[0], pad_left = pads[1];
+
+            for (int i = 0; i < new_h; i++) {
+                for (int j = 0; j < new_w; j++) {
+                    int ri = i - pad_top;
+                    int rj = j - pad_left;
+
+                    // Reflect vertically
+                    if (ri < 0) {
+                        ri = -ri;
+                    } else if (ri >= h) {
+                        ri = 2 * h - ri - 2;
+                    }
+
+                    // Reflect horizontally
+                    if (rj < 0) {
+                        rj = -rj;
+                    } else if (rj >= w) {
+                        rj = 2 * w - rj - 2;
+                    }
+
+                    // Ensure indices are within bounds
+                    ri = (ri < 0) ? 0 : (ri >= h ? h - 1 : ri);
+                    rj = (rj < 0) ? 0 : (rj >= w ? w - 1 : rj);
+
+                    padded->data[i * new_w + j] = t->data[ri * w + rj];
+                }
+            }
+            break;
+        }
+        case 3: {
+            for (int i = 0; i < new_dims[0]; i++) {
+                int idx_i = i - pads[0];
+                if (idx_i < 0)
+                    idx_i = -idx_i;
+                else if (idx_i >= t->shape[0])
+                    idx_i = 2 * t->shape[0] - 2 - idx_i;
+                for (int j = 0; j < new_dims[1]; j++) {
+                    int idx_j = j - pads[1];
+                    if (idx_j < 0)
+                        idx_j = -idx_j;
+                    else if (idx_j >= t->shape[1])
+                        idx_j = 2 * t->shape[1] - 2 - idx_j;
+                    for (int k = 0; k < new_dims[2]; k++) {
+                        int idx_k = k - pads[2];
+                        if (idx_k < 0)
+                            idx_k = -idx_k;
+                        else if (idx_k >= t->shape[2])
+                            idx_k = 2 * t->shape[2] - 2 - idx_k;
+                        padded->data[(i * new_dims[1] + j) * new_dims[2] + k] =
+                            t->data[(idx_i * t->shape[1] + idx_j) *
+                                        t->shape[2] +
+                                    idx_k];
+                    }
+                }
+            }
+            break;
+        }
+        case 4: {
+            for (int n = 0; n < new_dims[0]; n++) {
+                int idx_n = n - pads[0];
+                if (idx_n < 0)
+                    idx_n = -idx_n;
+                else if (idx_n >= t->shape[0])
+                    idx_n = 2 * t->shape[0] - 2 - idx_n;
+                for (int c = 0; c < new_dims[1]; c++) {
+                    int idx_c = c - pads[1];
+                    if (idx_c < 0)
+                        idx_c = -idx_c;
+                    else if (idx_c >= t->shape[1])
+                        idx_c = 2 * t->shape[1] - 2 - idx_c;
+                    for (int h = 0; h < new_dims[2]; h++) {
+                        int idx_h = h - pads[2];
+                        if (idx_h < 0)
+                            idx_h = -idx_h;
+                        else if (idx_h >= t->shape[2])
+                            idx_h = 2 * t->shape[2] - 2 - idx_h;
+                        for (int w = 0; w < new_dims[3]; w++) {
+                            int idx_w = w - pads[3];
+                            if (idx_w < 0)
+                                idx_w = -idx_w;
+                            else if (idx_w >= t->shape[3])
+                                idx_w = 2 * t->shape[3] - 2 - idx_w;
+                            padded->data[((n * new_dims[1] + c) * new_dims[2] +
+                                          h) *
+                                             new_dims[3] +
+                                         w] =
+                                t->data[((idx_n * t->shape[1] + idx_c) *
+                                             t->shape[2] +
+                                         idx_h) *
+                                            t->shape[3] +
+                                        idx_w];
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        }
+
+        return padded;
+    }
+    default: {
+        ERROR_F("padding %d not implemented yet", mode);
+        return NULL;
+    }
+    }
 }
 
 static mt_float mt__s_mul(mt_float a, mt_float b) { return a * b; }
