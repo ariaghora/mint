@@ -20,6 +20,7 @@ LayerKind = Enum(
         "AVG_POOL_2D",
         "CAST",
         "CONCAT",
+        "CONSTANT",
         "CONV_2D",
         "DENSE",
         "DIV",
@@ -27,6 +28,7 @@ LayerKind = Enum(
         "EXP",
         "FLATTEN",
         "GLOBAL_AVG_POOL",
+        "INSTANCE_NORMALIZATION",
         "LEAKY_RELU",
         "LOCAL_RESPONSE_NORM",
         "LOG",
@@ -35,6 +37,7 @@ LayerKind = Enum(
         "PAD",
         "RELU",
         "RESHAPE",
+        "RESIZE",
         "SIGMOID",
         "SOFTMAX",
         "SUB",
@@ -176,6 +179,22 @@ def write_log(
     print(f"wrote Log {id}")
 
 
+def write_instance_normalization(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.INSTANCE_NORMALIZATION.value, node)
+    eps = node["attributes"].get("epsilon", 1e-05)
+    np.array(eps, dtype=np.float32).tofile(f)
+
+    scale_idx = node["inputs"][1]
+    scale = tensors[scale_idx]
+    b_idx = node["inputs"][2]
+    b = tensors[b_idx]
+    write_ndarray(f, scale)
+    write_ndarray(f, b)
+    print(f"wrote InstanceNormalization {id}")
+
+
 def write_leaky_relu(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
@@ -226,6 +245,15 @@ def write_concat(
     print(f"wrote Concat {id}")
 
 
+def write_constant(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.CONSTANT.value, node)
+    value = node["attributes"]["value"]
+    write_ndarray(f, value)
+    print(f"wrote Constant {id}")
+
+
 def write_sub(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
@@ -253,6 +281,7 @@ def write_dropout(
     write_layer_header(f, LayerKind.DROPOUT.value, node)
     print("Currently dropout does not write any information")
     print(f"wrote Dropout {id}")
+
 
 def write_exp(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
@@ -344,18 +373,28 @@ def write_global_avg_pool(
     write_layer_header(f, LayerKind.GLOBAL_AVG_POOL.value, node)
     print(f"wrote GlobalAveragePool {id}")
 
+
 def write_pad(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
-    print(node)
     write_layer_header(f, LayerKind.PAD.value, node)
+    pads_idx = node["inputs"][1]
+    pads = tensors[pads_idx]
+    write_ndarray(f, pads)
+    # mode = node["attributes"]["mode"].lower()
+    # match mode:
+    #     case "reflect":
+    #         np.array(0, dtype=np.int32).tofile(f)
+
     print(f"wrote Pad {id}")
+
 
 def write_relu(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
     write_layer_header(f, LayerKind.RELU.value, node)
     print(f"wrote Relu {id}")
+
 
 def write_reshape(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
@@ -367,11 +406,33 @@ def write_reshape(
     write_ndarray(f, shape)
     print(f"wrote Reshape {id}")
 
+
+def write_resize(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.RESIZE.value, node)
+    mode = node["attributes"]["mode"].lower()
+
+    mode_idx = 0
+    match mode:
+        case "linear":
+            mode_idx = 0
+        case "nearest":
+            mode_idx = 1
+        case "cubic":
+            mode_idx = 2
+
+    np.array(mode_idx, dtype=np.int32).tofile(f)
+
+    print(f"wrote Resize {id}")
+
+
 def write_sigmoid(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
     write_layer_header(f, LayerKind.SIGMOID.value, node)
     print(f"wrote Sigmoid {id}")
+
 
 def write_softmax(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
@@ -379,6 +440,7 @@ def write_softmax(
     write_layer_header(f, LayerKind.SOFTMAX.value, node)
     np.array(node["attributes"].get("axis", -1), dtype=np.int32).tofile(f)
     print(f"wrote Softmax {id}")
+
 
 def write_tanh(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
@@ -423,6 +485,8 @@ if __name__ == "__main__":
                     write_add(f, id, node, model["tensors"])
                 case "Concat":
                     write_concat(f, id, node, model["tensors"])
+                case "Constant":
+                    write_constant(f, id, node, model["tensors"])
                 case "Sub":
                     write_sub(f, id, node, model["tensors"])
                 case "Mul":
@@ -443,6 +507,8 @@ if __name__ == "__main__":
                     write_dense(f, id, node, model["tensors"])
                 case "GlobalAveragePool":
                     write_global_avg_pool(f, id, node, model["tensors"])
+                case "InstanceNormalization":
+                    write_instance_normalization(f, id, node, model["tensors"])
                 case "LeakyRelu":
                     write_leaky_relu(f, id, node, model["tensors"])
                 case "LRN":
@@ -457,6 +523,8 @@ if __name__ == "__main__":
                     write_relu(f, id, node, model["tensors"])
                 case "Reshape":
                     write_reshape(f, id, node, model["tensors"])
+                case "Resize":
+                    write_resize(f, id, node, model["tensors"])
                 case "Sigmoid":
                     write_sigmoid(f, id, node, model["tensors"])
                 case "Softmax":

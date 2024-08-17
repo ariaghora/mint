@@ -221,6 +221,9 @@ mt_tensor *mt_global_avg_pool_2d(mt_tensor *x);
 mt_tensor *mt_image_resize(mt_tensor *t, int target_height, int target_width);
 // Standardize tensor RGB image. Both mu and std must have 3 elements.
 void       mt_image_standardize(mt_tensor *t, mt_float *mu, mt_float *std);
+// Perform instance normalization
+mt_tensor *mt_instance_normalize(mt_tensor *t, mt_tensor *scale, mt_tensor *b,
+                                 mt_float epsilon);
 // Leaky relu
 void       mt_leaky_relu_inplace(mt_tensor *t, mt_float alpha);
 // Local response norm, as introduced in AlexNet paper
@@ -284,6 +287,7 @@ typedef enum {
     MT_LAYER_AVG_POOL_2D,
     MT_LAYER_CAST, // ignored
     MT_LAYER_CONCAT,
+    MT_LAYER_CONSTANT,
     MT_LAYER_CONV_2D,
     MT_LAYER_DENSE,
     MT_LAYER_DIV,
@@ -291,6 +295,7 @@ typedef enum {
     MT_LAYER_EXP,
     MT_LAYER_FLATTEN,
     MT_LAYER_GLOBAL_AVG_POOL,
+    MT_LAYER_INSTANCE_NORMALIZATION,
     MT_LAYER_LEAKY_RELU,
     MT_LAYER_LOCAL_RESPONSE_NORM,
     MT_LAYER_LOG,
@@ -299,6 +304,7 @@ typedef enum {
     MT_LAYER_PAD,
     MT_LAYER_RELU,
     MT_LAYER_RESHAPE,
+    MT_LAYER_RESIZE,
     MT_LAYER_SIGMOID,
     MT_LAYER_SOFTMAX,
     MT_LAYER_SUB,
@@ -367,6 +373,11 @@ typedef struct mt_layer {
             int axis;
         } concat;
 
+        // MT_LAYER_CONSTANT
+        struct {
+            int tensor_idx;
+        } constant;
+
         // MT_LAYER_CONV_2D
         struct {
             int w_id;
@@ -385,7 +396,12 @@ typedef struct mt_layer {
         struct {
             int axis;
         } flatten;
-        //
+
+        // MT_LAYER_INSTANCE_NORMALIZATION
+        struct {
+            mt_float eps;
+        } instance_normalization;
+
         // MT_LAYER_LEAKY_RELU
         struct {
             mt_float alpha;
@@ -405,6 +421,11 @@ typedef struct mt_layer {
             int stride;
             int pads[4];
         } max_pool_2d;
+
+        // MT_LAYER_RESIZE
+        struct {
+            int mode;
+        } resize;
 
         // MT_LAYER_SOFTMAX
         struct {
@@ -1022,10 +1043,6 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
 
     // Process each item in the batch
     for (int n = 0; n < batch_size; n++) {
-        // Create a temporary CHW tensor for the current batch item
-        // mt_tensor temp_input = {.data  = x->data + n * C_in * H_in * W_in,
-        //                         .ndim  = 3,
-        //                         .shape = {C_in, H_in, W_in}};
         mt_tensor *temp_input = mt_tensor_alloc_values(
             (int[]){C_in, H_in, W_in}, 3, x->data + n * C_in * H_in * W_in);
 
@@ -1037,7 +1054,7 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
         memcpy(output->data + n * C_out * H_out * W_out, temp_output->data,
                C_out * H_out * W_out * sizeof(mt_float));
 
-        // Free the temporary output tensor
+        mt_tensor_free(temp_input);
         mt_tensor_free(temp_output);
     }
 
@@ -1220,11 +1237,69 @@ void mt_image_standardize(mt_tensor *t, mt_float *mu, mt_float *std) {
     }
 }
 
+mt_tensor *mt_instance_normalize(mt_tensor *t, mt_tensor *scale, mt_tensor *b,
+                                 mt_float epsilon) {
+    MT_ASSERT(t->ndim >= 2 && t->ndim <= 4,
+              "Input tensor must be 2D, 3D, or 4D");
+    MT_ASSERT(scale->ndim == 1 && scale->shape[0] == t->shape[1],
+              "Scale tensor must be 1D with size equal to number of channels");
+    MT_ASSERT(b->ndim == 1 && b->shape[0] == t->shape[1],
+              "Bias tensor must be 1D with size equal to number of channels");
+
+    int N = t->shape[0];
+    int C = t->shape[1];
+    int H = t->ndim > 2 ? t->shape[2] : 1;
+    int W = t->ndim > 3 ? t->shape[3] : 1;
+
+    mt_tensor *output = mt_tensor_alloc(t->shape, t->ndim);
+
+#pragma omp parallel for collapse(2)
+    for (int n = 0; n < N; n++) {
+        for (int c = 0; c < C; c++) {
+            // Compute mean
+            mt_float sum = 0.0f;
+            for (int h = 0; h < H; h++) {
+                for (int w = 0; w < W; w++) {
+                    int idx = ((n * C + c) * H + h) * W + w;
+                    sum += t->data[idx];
+                }
+            }
+            mt_float mean = sum / (H * W);
+
+            // Compute variance
+            mt_float var_sum = 0.0f;
+            for (int h = 0; h < H; h++) {
+                for (int w = 0; w < W; w++) {
+                    int      idx  = ((n * C + c) * H + h) * W + w;
+                    mt_float diff = t->data[idx] - mean;
+                    var_sum += diff * diff;
+                }
+            }
+            mt_float variance = var_sum / (H * W);
+
+            // Normalize
+            mt_float inv_std   = 1.0f / sqrtf(variance + epsilon);
+            mt_float scale_val = scale->data[c];
+            mt_float bias_val  = b->data[c];
+
+            for (int h = 0; h < H; h++) {
+                for (int w = 0; w < W; w++) {
+                    int idx = ((n * C + c) * H + h) * W + w;
+                    output->data[idx] =
+                        scale_val * (t->data[idx] - mean) * inv_std + bias_val;
+                }
+            }
+        }
+    }
+    return output;
+}
+
 void mt_leaky_relu_inplace(mt_tensor *t, mt_float alpha) {
     for (int i = 0; i < mt_tensor_count_element(t); ++i) {
         t->data[i] = t->data[i] < 0 ? alpha * t->data[i] : t->data[i];
     }
 }
+
 mt_tensor *mt_local_response_norm(mt_tensor *t, int size, mt_float alpha,
                                   mt_float beta, mt_float k) {
     MT_ASSERT(t->ndim == 4, "Input tensor must be 4-dimensional (CHW format)");
@@ -1772,7 +1847,8 @@ void mt_tensor_unsqueeze_inplace(mt_tensor *t, int dim) {
 }
 
 mt_tensor *mt_tensor_alloc(int *shape, int ndim) {
-    MT_ASSERT(ndim <= MAX_TENSOR_NDIM, "");
+    MT_ASSERT_F(ndim <= MAX_TENSOR_NDIM, "ndim cannot exceed %d, found %d",
+                MAX_TENSOR_NDIM, ndim);
 
     mt_tensor *t = (mt_tensor *)calloc(1, sizeof(*t));
     t->ndim      = ndim;
@@ -1961,6 +2037,11 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             mt_reader_read(&layer->data.avg_pool_2d.pads, sizeof(int), 1, &mp);
         } else if (layer->kind == MT_LAYER_CONCAT) {
             mt_reader_read(&layer->data.concat.axis, sizeof(int), 1, &mp);
+        } else if (layer->kind == MT_LAYER_CONSTANT) {
+            int tensor_idx                  = layer->outputs[0];
+            layer->data.constant.tensor_idx = tensor_idx;
+            mt_tensor *val                  = mt_tensor_memread(&mp);
+            model->tensors[tensor_idx]      = val;
         } else if (layer->kind == MT_LAYER_CONV_2D) {
             mt_reader_read(&layer->data.conv_2d.stride, sizeof(int), 1, &mp);
             mt_reader_read(&layer->data.conv_2d.pads, sizeof(int), 4, &mp);
@@ -2004,15 +2085,27 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             mt_reader_read(&layer->data.flatten.axis, sizeof(int), 1, &mp);
         } else if (layer->kind == MT_LAYER_GLOBAL_AVG_POOL) {
             // nothing to read
+        } else if (layer->kind == MT_LAYER_INSTANCE_NORMALIZATION) {
+            mt_reader_read(&layer->data.instance_normalization.eps,
+                           sizeof(mt_float), 1, &mp);
+            int scale_idx             = layer->inputs[1];
+            model->tensors[scale_idx] = mt_tensor_memread(&mp);
+            int bias_idx              = layer->inputs[2];
+            model->tensors[bias_idx]  = mt_tensor_memread(&mp);
         } else if (layer->kind == MT_LAYER_LEAKY_RELU) {
             mt_reader_read(&layer->data.leaky_relu.alpha, sizeof(mt_float), 1,
                            &mp);
+        } else if (layer->kind == MT_LAYER_PAD) {
+            int pads_idx             = layer->inputs[1];
+            model->tensors[pads_idx] = mt_tensor_memread(&mp);
         } else if (layer->kind == MT_LAYER_RELU) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_RESHAPE) {
             // nothing to read; the shape will be an input tensor
             int shape_idx             = layer->inputs[1];
             model->tensors[shape_idx] = mt_tensor_memread(&mp);
+        } else if (layer->kind == MT_LAYER_RESIZE) {
+            mt_reader_read(&layer->data.resize.mode, sizeof(int), 1, &mp);
         } else if (layer->kind == MT_LAYER_SIGMOID) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_SOFTMAX) {
@@ -2142,6 +2235,11 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         model->tensors[l->outputs[0]] = res;
         break;
     }
+    case MT_LAYER_CONSTANT: {
+        // do nothing
+        // TODO(Aria): explain why do nothing
+        break;
+    }
     case MT_LAYER_CONV_2D: {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res = mt_convolve_2d(input, model->tensors[l->data.conv_2d.w_id],
@@ -2205,6 +2303,15 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         model->tensors[l->outputs[0]] = res;
         break;
     }
+    case MT_LAYER_INSTANCE_NORMALIZATION: {
+        mt_float   eps   = l->data.instance_normalization.eps;
+        mt_tensor *input = model->tensors[l->inputs[0]];
+        mt_tensor *scale = model->tensors[l->inputs[1]];
+        mt_tensor *bias  = model->tensors[l->inputs[2]];
+        res              = mt_instance_normalize(input, scale, bias, eps);
+        model->tensors[l->outputs[0]] = res;
+        break;
+    }
     case MT_LAYER_LOCAL_RESPONSE_NORM: {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res = mt_local_response_norm(input, l->data.local_response_norm.size,
@@ -2219,6 +2326,29 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         res =
             mt_maxpool_2d(input, l->data.max_pool_2d.size,
                           l->data.max_pool_2d.stride, l->data.max_pool_2d.pads);
+        model->tensors[l->outputs[0]] = res;
+        break;
+    }
+    case MT_LAYER_PAD: {
+        mt_tensor *input    = model->tensors[l->inputs[0]];
+        mt_tensor *pads     = model->tensors[l->inputs[1]];
+        int        pads_len = mt_tensor_count_element(pads);
+        int        pads_int[MAX_TENSOR_NDIM * 2] = {0};
+
+        // Convert shape float tensor into int arr
+        for (int i = 0; i < pads_len; ++i)
+            pads_int[i] = (int)pads->data[i];
+        DEBUG_LOG("WARNING: currently pad mode is always reflect");
+        res = mt_tensor_pad(input, pads_int, MT_PAD_REFLECT, 0.0);
+
+        model->tensors[l->outputs[0]] = res;
+
+        break;
+    }
+    case MT_LAYER_RELU: {
+        mt_tensor *input = model->tensors[l->inputs[0]];
+        res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
+        mt_relu_inplace(res);
         model->tensors[l->outputs[0]] = res;
         break;
     }
@@ -2238,10 +2368,63 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         model->tensors[l->outputs[0]] = res;
         break;
     }
-    case MT_LAYER_RELU: {
+    case MT_LAYER_RESIZE: {
         mt_tensor *input = model->tensors[l->inputs[0]];
-        res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
-        mt_relu_inplace(res);
+        MT_ASSERT(input->ndim == 4, "can only resize 4-D tensor for now");
+
+        mt_tensor *roi    = model->tensors[l->inputs[1]];
+        mt_tensor *scales = model->tensors[l->inputs[2]];
+
+        if (scales != NULL)
+            MT_ASSERT(mt_tensor_count_element(scales) == 4,
+                      "scales must have 4 elements");
+
+        mt_tensor *sizes = NULL;
+        if (l->input_count > 3) {
+            sizes = model->tensors[l->inputs[3]];
+        }
+
+        if (scales == NULL && sizes == NULL) {
+            ERROR("one of scales or sizes must be present");
+        }
+
+        MT_ASSERT(scales->data[0] == 1 && scales->data[1] == 1,
+                  "canot scale batch and channel axes");
+
+        int      batch_size    = input->shape[0];
+        int      channels      = input->shape[1];
+        int      input_height  = input->shape[2];
+        int      input_width   = input->shape[3];
+        mt_float h_scale       = scales->data[2];
+        mt_float w_scale       = scales->data[3];
+        int      target_height = (int)(input_height * h_scale);
+        int      target_width  = (int)(input_width * w_scale);
+
+        int output_shape[4] = {batch_size, channels, target_height,
+                               target_width};
+        res                 = mt_tensor_alloc(output_shape, 4);
+        // Resize each image in the batch
+        for (int n = 0; n < batch_size; n++) {
+            // Create a temporary CHW tensor for the current batch item
+            mt_tensor temp_input = {
+                .data = input->data + n * channels * input_height * input_width,
+                .ndim = 3,
+                .shape = {channels, input_height, input_width},
+            };
+
+            // Resize the current batch item
+            mt_tensor *temp_output =
+                mt_image_resize(&temp_input, target_height, target_width);
+
+            // Copy the result to the output tensor
+            memcpy(res->data + n * channels * target_height * target_width,
+                   temp_output->data,
+                   channels * target_height * target_width * sizeof(mt_float));
+
+            // Free the temporary output tensor
+            mt_tensor_free(temp_output);
+        }
+
         model->tensors[l->outputs[0]] = res;
         break;
     }
