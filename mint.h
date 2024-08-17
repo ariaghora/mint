@@ -281,37 +281,6 @@ void       mt_tensor_unsqueeze_inplace(mt_tensor *t, int axis);
 
 typedef struct mt_model mt_model;
 
-// typedef enum {
-//     MT_LAYER_UNKNOWN,
-//     MT_LAYER_ADD,
-//     MT_LAYER_AVG_POOL_2D,
-//     MT_LAYER_CAST, // ignored
-//     MT_LAYER_CONCAT,
-//     MT_LAYER_CONSTANT,
-//     MT_LAYER_CONV_2D,
-//     MT_LAYER_DENSE,
-//     MT_LAYER_DIV,
-//     MT_LAYER_DROPOUT,
-//     MT_LAYER_EXP,
-//     MT_LAYER_FLATTEN,
-//     MT_LAYER_GLOBAL_AVG_POOL,
-//     MT_LAYER_INSTANCE_NORMALIZATION,
-//     MT_LAYER_LEAKY_RELU,
-//     MT_LAYER_LOCAL_RESPONSE_NORM,
-//     MT_LAYER_LOG,
-//     MT_LAYER_MAX_POOL_2D,
-//     MT_LAYER_MUL,
-//     MT_LAYER_PAD,
-//     MT_LAYER_RELU,
-//     MT_LAYER_RESHAPE,
-//     MT_LAYER_RESIZE,
-//     MT_LAYER_SIGMOID,
-//     MT_LAYER_SOFTMAX,
-//     MT_LAYER_SUB,
-//     MT_LAYER_TANH,
-//     MT_LAYER_TRANSPOSE,
-// } mt_layer_kind;
-
 #define LAYER_TYPES(X)                                                         \
     X(MT_LAYER_UNKNOWN)                                                        \
     X(MT_LAYER_ADD)                                                            \
