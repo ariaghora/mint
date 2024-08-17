@@ -83,7 +83,8 @@ def parse_onnx(filename: str) -> Dict[str, Any]:
 
     for initializer in onnx_model.graph.initializer:
         name_to_id[initializer.name] = len(model_structure["tensors"])
-        model_structure["tensors"].append(onnx_tensor_to_numpy(initializer))
+        val = onnx_tensor_to_numpy(initializer)
+        model_structure["tensors"].append(val)
 
     # Process nodes
     for node in onnx_model.graph.node:
@@ -353,6 +354,10 @@ def write_reshape(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
     write_layer_header(f, LayerKind.RESHAPE.value, node)
+
+    shape_idx = node["inputs"][1]
+    shape = tensors[shape_idx]
+    write_ndarray(f, shape)
     print(f"wrote Reshape {id}")
 
 def write_sigmoid(

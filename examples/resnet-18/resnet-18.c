@@ -1,4 +1,3 @@
-#include <stdio.h>
 #define STB_IMAGE_IMPLEMENTATION
 #include "../../vendors/stb_image.h"
 
@@ -32,6 +31,8 @@ int main(int argc, char **argv) {
     float *mean = MT_ARR_FLOAT(0.485, 0.456, 0.406);
     float *std  = MT_ARR_FLOAT(0.229, 0.224, 0.225);
     mt_image_standardize(image, mean, std);
+
+    mt_tensor_unsqueeze_inplace(image, 0);
 
     mt_model_set_input(model, "input", image);
     mt_model_run(model);

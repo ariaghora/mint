@@ -223,7 +223,7 @@ mt_tensor *mt_local_response_norm(mt_tensor *t, int size, mt_float alpha,
 // Matrix multiplication. Both a and b must have 2 dimensions.
 mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b);
 // Max-pooling
-mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int pad);
+mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int *pads);
 // Element-wise multiplication
 mt_tensor *mt_mul(mt_tensor *a, mt_tensor *b);
 // Relu activation function, in-place version.
@@ -256,11 +256,12 @@ void       mt_tensor_free(mt_tensor *t);
 mt_tensor *mt_tensor_load_image(char *filename);
 // Swap tensor's dimensions
 mt_tensor *mt_tensor_permute_dims(mt_tensor *t, int *dims);
+// Reshape tensor in-place. The old and new shape should be compatible.
+void mt_tensor_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim);
 // Tensor slice
 mt_tensor *mt_tensor_slice(mt_tensor *t, int *starts, int *ends, int *axes,
                            int *steps, int num_axes);
-// Reshape tensor in-place. The old and new shape should be compatible.
-void mt_tensor_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim);
+void       mt_tensor_unsqueeze_inplace(mt_tensor *t, int axis);
 
 /*
  * Model API
@@ -301,6 +302,10 @@ mt_tensor *mt_model_get_output(mt_model *model, const char *name);
 void       mt_model_run(mt_model *model);
 void       mt_model_set_input(mt_model *model, const char *name, mt_tensor *t);
 
+typedef struct mt_layer mt_layer;
+
+void mt_layer_debug_info(mt_layer *l);
+
 /***************************************************************************
   MINT IMPLEMENTATION                                                  MT006
  **************************************************************************/
@@ -332,7 +337,7 @@ typedef struct mt_tensor {
     int shape[MAX_TENSOR_NDIM];
 } mt_tensor;
 
-typedef struct {
+typedef struct mt_layer {
     int           id;
     mt_layer_kind kind;
     // This member holds data of different layer types. Some layers do not
@@ -388,7 +393,7 @@ typedef struct {
         struct {
             int size;
             int stride;
-            int pad;
+            int pads[4];
         } max_pool_2d;
 
         // MT_LAYER_SOFTMAX
@@ -434,6 +439,7 @@ typedef struct mt_model {
 #ifdef NDEBUG
 #define MT_ASSERT_F(condition, format, ...) ((void)0)
 #define DEBUG_LOG_F(format, ...) ((void)0)
+#define DEBUG_LOG(msg) ((void)0)
 #else
 #define MT_ASSERT_F(condition, format, ...)                                    \
     do {                                                                       \
@@ -453,6 +459,14 @@ typedef struct mt_model {
         fprintf(stderr, "\x1b[33m");                                           \
         fprintf(stderr, "DEBUG [%s:%d]: ", __FILE__, __LINE__);                \
         fprintf(stderr, format, __VA_ARGS__);                                  \
+        fprintf(stderr, "\x1b[0m\n");                                          \
+    } while (0)
+
+#define DEBUG_LOG(msg)                                                         \
+    do {                                                                       \
+        fprintf(stderr, "\x1b[33m");                                           \
+        fprintf(stderr, "DEBUG [%s:%d]: ", __FILE__, __LINE__);                \
+        fprintf(stderr, msg);                                                  \
         fprintf(stderr, "\x1b[0m\n");                                          \
     } while (0)
 #endif
@@ -746,10 +760,12 @@ mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b) {
 
 mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride,
                           int *pads) {
-    MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional");
-    int C    = x->shape[0];
-    int H_in = x->shape[1];
-    int W_in = x->shape[2];
+    MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional (NCHW format)");
+
+    int N    = x->shape[0]; // Batch size
+    int C    = x->shape[1]; // Number of channels
+    int H_in = x->shape[2];
+    int W_in = x->shape[3];
 
     // Calculate output dimensions with padding
     int pad_h_begin = pads[0];
@@ -762,31 +778,32 @@ mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride,
     int W_out = (W_in + pad_w_begin + pad_w_end - kernel_size) / stride + 1;
 
     // Allocate output tensor
-    mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C, H_out, W_out), 3);
-
-    for (int c = 0; c < C; c++) {
-        for (int h_out = 0; h_out < H_out; h_out++) {
-            for (int w_out = 0; w_out < W_out; w_out++) {
-                mt_float sum   = 0.0f;
-                int      count = 0;
-
-                for (int kh = 0; kh < kernel_size; kh++) {
-                    for (int kw = 0; kw < kernel_size; kw++) {
-                        int h_in = h_out * stride + kh - pad_h_begin;
-                        int w_in = w_out * stride + kw - pad_w_begin;
-
-                        if (h_in >= 0 && h_in < H_in && w_in >= 0 &&
-                            w_in < W_in) {
-                            sum +=
-                                x->data[c * H_in * W_in + h_in * W_in + w_in];
-                            count++;
+    mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(N, C, H_out, W_out), 4);
+    for (int n = 0; n < N; n++) {
+        for (int c = 0; c < C; c++) {
+            for (int h_out = 0; h_out < H_out; h_out++) {
+                for (int w_out = 0; w_out < W_out; w_out++) {
+                    mt_float sum   = 0.0f;
+                    int      count = 0;
+                    for (int kh = 0; kh < kernel_size; kh++) {
+                        for (int kw = 0; kw < kernel_size; kw++) {
+                            int h_in = h_out * stride + kh - pad_h_begin;
+                            int w_in = w_out * stride + kw - pad_w_begin;
+                            if (h_in >= 0 && h_in < H_in && w_in >= 0 &&
+                                w_in < W_in) {
+                                sum +=
+                                    x->data[((n * C + c) * H_in + h_in) * W_in +
+                                            w_in];
+                                count++;
+                            }
                         }
                     }
+                    // Calculate average and set output value
+                    mt_float avg = (count > 0) ? sum / count : 0.0f;
+                    output
+                        ->data[((n * C + c) * H_out + h_out) * W_out + w_out] =
+                        avg;
                 }
-
-                // Calculate average and set output value
-                mt_float avg = (count > 0) ? sum / count : 0.0f;
-                output->data[c * H_out * W_out + h_out * W_out + w_out] = avg;
             }
         }
     }
@@ -842,9 +859,9 @@ mt_tensor *mt_concat(mt_tensor **inputs, int num_inputs, int axis) {
 
     return output;
 }
-mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
-                          int *pads) {
-    MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional");
+mt_tensor *mt_convolve_2d_single(mt_tensor *x, mt_tensor *w, mt_tensor *b,
+                                 int stride, int *pads) {
+    MT_ASSERT(x->ndim == 3, "Input tensor must be 3-dimensional");
     MT_ASSERT(w->ndim == 4, "Weight tensor must be 4-dimensional");
     MT_ASSERT(b->ndim == 1, "Bias tensor must be 1-dimensional");
     MT_ASSERT(x->shape[0] == w->shape[1],
@@ -962,6 +979,57 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
         }
     }
 #endif
+    return output;
+}
+
+mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
+                          int *pads) {
+    MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional (NCHW format)");
+    MT_ASSERT(w->ndim == 4, "Weight tensor must be 4-dimensional");
+    MT_ASSERT(b->ndim == 1, "Bias tensor must be 1-dimensional");
+
+    int batch_size = x->shape[0];
+    int C_in       = x->shape[1];
+    int H_in       = x->shape[2];
+    int W_in       = x->shape[3];
+
+    int C_out = w->shape[0];
+    int K_h   = w->shape[2];
+    int K_w   = w->shape[3];
+
+    int pad_h_begin = pads[0];
+    int pad_w_begin = pads[1];
+    int pad_h_end   = pads[2];
+    int pad_w_end   = pads[3];
+
+    // Calculate output dimensions with padding
+    int H_out = (H_in + pad_h_begin + pad_h_end - K_h) / stride + 1;
+    int W_out = (W_in + pad_w_begin + pad_w_end - K_w) / stride + 1;
+
+    // Allocate output tensor
+    int        output_shape[4] = {batch_size, C_out, H_out, W_out};
+    mt_tensor *output          = mt_tensor_alloc(output_shape, 4);
+
+    // Process each item in the batch
+    for (int n = 0; n < batch_size; n++) {
+        // Create a temporary CHW tensor for the current batch item
+        // mt_tensor temp_input = {.data  = x->data + n * C_in * H_in * W_in,
+        //                         .ndim  = 3,
+        //                         .shape = {C_in, H_in, W_in}};
+        mt_tensor *temp_input = mt_tensor_alloc_values(
+            (int[]){C_in, H_in, W_in}, 3, x->data + n * C_in * H_in * W_in);
+
+        // Perform convolution for the current batch item
+        mt_tensor *temp_output =
+            mt_convolve_2d_single(temp_input, w, b, stride, pads);
+
+        // Copy the result to the output tensor
+        memcpy(output->data + n * C_out * H_out * W_out, temp_output->data,
+               C_out * H_out * W_out * sizeof(mt_float));
+
+        // Free the temporary output tensor
+        mt_tensor_free(temp_output);
+    }
 
     return output;
 }
@@ -1025,24 +1093,28 @@ static mt_float mt__s_exp(mt_float x) { return exp(x); }
 mt_tensor      *mt_exp(mt_tensor *t) { return mt__unop(t, mt__s_exp); }
 
 mt_tensor *mt_global_avg_pool_2d(mt_tensor *x) {
-    MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional");
-    int C = x->shape[0];
-    int H = x->shape[1];
-    int W = x->shape[2];
+    MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional (NCHW format)");
 
-    // Allocate output tensor of shape (C, 1, 1)
-    mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C, 1, 1), 3);
+    int N = x->shape[0]; // Batch size
+    int C = x->shape[1]; // Number of channels
+    int H = x->shape[2];
+    int W = x->shape[3];
 
-#pragma omp parallel for
-    // Perform global average pooling
-    for (int c = 0; c < C; c++) {
-        mt_float sum = 0.0f;
-        for (int h = 0; h < H; h++) {
-            for (int w = 0; w < W; w++) {
-                sum += x->data[c * H * W + h * W + w];
+    // Allocate output tensor of shape (N, C, 1, 1)
+    mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(N, C, 1, 1), 4);
+
+// Perform global average pooling for each sample in the batch
+#pragma omp parallel for collapse(2)
+    for (int n = 0; n < N; n++) {
+        for (int c = 0; c < C; c++) {
+            mt_float sum = 0.0f;
+            for (int h = 0; h < H; h++) {
+                for (int w = 0; w < W; w++) {
+                    sum += x->data[((n * C + c) * H + h) * W + w];
+                }
             }
+            output->data[n * C + c] = sum / (H * W);
         }
-        output->data[c] = sum / (H * W);
     }
 
     return output;
@@ -1050,8 +1122,8 @@ mt_tensor *mt_global_avg_pool_2d(mt_tensor *x) {
 
 mt_tensor *mt_image_resize(mt_tensor *img, int target_height,
                            int target_width) {
-    MT_ASSERT(img->ndim == 4,
-              "Input tensor must be 4-dimensional (NCHW format)");
+    MT_ASSERT(img->ndim == 3,
+              "Input tensor must be 3-dimensional (CHW format)");
 
     int channels   = img->shape[0];
     int src_height = img->shape[1];
@@ -1125,7 +1197,7 @@ mt_tensor *mt_image_resize(mt_tensor *img, int target_height,
 }
 
 void mt_image_standardize(mt_tensor *t, mt_float *mu, mt_float *std) {
-    MT_ASSERT(t->ndim == 4, "input must be 4 dimensional");
+    MT_ASSERT(t->ndim == 3, "input must be 4 dimensional");
     int h = t->shape[1];
     int w = t->shape[2];
     for (int c = 0; c < 3; ++c) {
@@ -1180,45 +1252,52 @@ mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b) {
     return mt__matmul_backend(a, b);
 }
 
-mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int pad) {
-    MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional (CHW format)");
+mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int *pads) {
+    MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional (NCHW format)");
 
-    int C    = x->shape[0];
-    int H_in = x->shape[1];
-    int W_in = x->shape[2];
+    int N    = x->shape[0]; // Batch size
+    int C    = x->shape[1]; // Number of channels
+    int H_in = x->shape[2];
+    int W_in = x->shape[3];
+
+    int pad_h_begin = pads[0];
+    int pad_w_begin = pads[1];
+    int pad_h_end   = pads[2];
+    int pad_w_end   = pads[3];
 
     // Calculate output dimensions with padding
-    int H_out = (H_in + 2 * pad - kernel_size) / stride + 1;
-    int W_out = (W_in + 2 * pad - kernel_size) / stride + 1;
+    int H_out = (H_in + pad_h_begin + pad_h_end - kernel_size) / stride + 1;
+    int W_out = (W_in + pad_w_begin + pad_w_end - kernel_size) / stride + 1;
 
     // Allocate output tensor
-    mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C, H_out, W_out), 3);
+    mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(N, C, H_out, W_out), 4);
 
-#pragma omp parallel for
-    for (int c = 0; c < C; c++) {
-        for (int h_out = 0; h_out < H_out; h_out++) {
-            for (int w_out = 0; w_out < W_out; w_out++) {
-                mt_float max_val = -INFINITY;
-
-                for (int kh = 0; kh < kernel_size; kh++) {
-                    for (int kw = 0; kw < kernel_size; kw++) {
-                        int h_in = h_out * stride + kh - pad;
-                        int w_in = w_out * stride + kw - pad;
-
-                        if (h_in >= 0 && h_in < H_in && w_in >= 0 &&
-                            w_in < W_in) {
-                            mt_float val =
-                                x->data[c * H_in * W_in + h_in * W_in + w_in];
-                            if (val > max_val) {
-                                max_val = val;
+#pragma omp parallel for collapse(4)
+    for (int n = 0; n < N; n++) {
+        for (int c = 0; c < C; c++) {
+            for (int h_out = 0; h_out < H_out; h_out++) {
+                for (int w_out = 0; w_out < W_out; w_out++) {
+                    mt_float max_val = -INFINITY;
+                    for (int kh = 0; kh < kernel_size; kh++) {
+                        for (int kw = 0; kw < kernel_size; kw++) {
+                            int h_in = h_out * stride + kh - pad_h_begin;
+                            int w_in = w_out * stride + kw - pad_w_begin;
+                            if (h_in >= 0 && h_in < H_in && w_in >= 0 &&
+                                w_in < W_in) {
+                                mt_float val =
+                                    x->data[((n * C + c) * H_in + h_in) * W_in +
+                                            w_in];
+                                if (val > max_val) {
+                                    max_val = val;
+                                }
                             }
                         }
                     }
+                    // Set output value with direct indexing
+                    output
+                        ->data[((n * C + c) * H_out + h_out) * W_out + w_out] =
+                        max_val;
                 }
-
-                // Set output value with direct indexing
-                output->data[c * H_out * W_out + h_out * W_out + w_out] =
-                    max_val;
             }
         }
     }
@@ -1534,6 +1613,14 @@ void mt_tensor_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim) {
     t->ndim = new_ndim;
 }
 
+void mt_tensor_unsqueeze_inplace(mt_tensor *t, int dim) {
+    for (int i = t->ndim; i > dim; --i) {
+        t->shape[i] = t->shape[i - 1];
+    }
+    t->shape[dim] = 1;
+    t->ndim += 1;
+}
+
 mt_tensor *mt_tensor_alloc(int *shape, int ndim) {
     MT_ASSERT(ndim <= MAX_TENSOR_NDIM, "");
 
@@ -1575,6 +1662,10 @@ mt_tensor *mt_tensor_alloc_random(int *shape, int ndim) {
 }
 
 void mt_tensor_debug_info(mt_tensor *t) {
+    if (t == NULL) {
+        printf("NULL\n");
+        return;
+    }
     printf("ndim  : %d\n", t->ndim);
     printf("shape : [");
     for (int i = 0; i < t->ndim; ++i) {
@@ -1720,13 +1811,6 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             mt_reader_read(&layer->data.avg_pool_2d.pads, sizeof(int), 1, &mp);
         } else if (layer->kind == MT_LAYER_CONCAT) {
             mt_reader_read(&layer->data.concat.axis, sizeof(int), 1, &mp);
-            // if (input_in_batch) {
-            //     DEBUG_LOG_F("Input is in batch but only a single sample is "
-            //                 "considered. Changing axis %d to %d",
-            //                 layer->data.concat.axis,
-            //                 layer->data.concat.axis - 1);
-            //     layer->data.concat.axis--;
-            // }
         } else if (layer->kind == MT_LAYER_CONV_2D) {
             mt_reader_read(&layer->data.conv_2d.stride, sizeof(int), 1, &mp);
             mt_reader_read(&layer->data.conv_2d.pads, sizeof(int), 4, &mp);
@@ -1763,20 +1847,11 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             mt_reader_read(&layer->data.max_pool_2d.size, sizeof(int), 1, &mp);
             mt_reader_read(&layer->data.max_pool_2d.stride, sizeof(int), 1,
                            &mp);
-            mt_reader_read(&layer->data.max_pool_2d.pad, sizeof(int), 4, &mp);
+            mt_reader_read(&layer->data.max_pool_2d.pads, sizeof(int), 4, &mp);
         } else if (layer->kind == MT_LAYER_MUL) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_FLATTEN) {
             mt_reader_read(&layer->data.flatten.axis, sizeof(int), 1, &mp);
-
-            // if model input is in batch, axis should be decreased by one
-            // if (input_in_batch) {
-            //     DEBUG_LOG_F("Input is in batch but only a single sample is "
-            //                 "considered. Changing axis %d to %d",
-            //                 layer->data.flatten.axis,
-            //                 layer->data.flatten.axis - 1);
-            //     layer->data.flatten.axis--;
-            // }
         } else if (layer->kind == MT_LAYER_GLOBAL_AVG_POOL) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_LEAKY_RELU) {
@@ -1786,6 +1861,8 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             // nothing to read
         } else if (layer->kind == MT_LAYER_RESHAPE) {
             // nothing to read; the shape will be an input tensor
+            int shape_idx             = layer->inputs[1];
+            model->tensors[shape_idx] = mt_tensor_memread(&mp);
         } else if (layer->kind == MT_LAYER_SIGMOID) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_SOFTMAX) {
@@ -1909,11 +1986,9 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         mt_tensor *inputs[l->input_count];
         for (int i = 0; i < l->input_count; ++i) {
             inputs[i] = model->tensors[l->inputs[i]];
-            mt_tensor_debug_info(inputs[i]);
         }
 
         res = mt_concat(inputs, l->input_count, l->data.concat.axis);
-        mt_tensor_debug_info(res);
         model->tensors[l->outputs[0]] = res;
         break;
     }
@@ -1929,6 +2004,14 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res              = mt_affine(input, model->tensors[l->data.dense.w_id],
                                      model->tensors[l->data.dense.b_id]);
+        model->tensors[l->outputs[0]] = res;
+        break;
+    }
+    case MT_LAYER_DROPOUT: {
+        mt_tensor *input = model->tensors[l->inputs[0]];
+        DEBUG_LOG("drop-out has no effect");
+        mt_tensor *res =
+            mt_tensor_alloc_values(input->shape, input->ndim, input->data);
         model->tensors[l->outputs[0]] = res;
         break;
     }
@@ -1985,7 +2068,23 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res =
             mt_maxpool_2d(input, l->data.max_pool_2d.size,
-                          l->data.max_pool_2d.stride, l->data.max_pool_2d.pad);
+                          l->data.max_pool_2d.stride, l->data.max_pool_2d.pads);
+        model->tensors[l->outputs[0]] = res;
+        break;
+    }
+    case MT_LAYER_RESHAPE: {
+        mt_tensor *input1 = model->tensors[l->inputs[0]];
+
+        mt_tensor *shape_tensor = model->tensors[l->inputs[1]];
+        int        new_ndim     = mt_tensor_count_element(shape_tensor);
+        int        new_shape[MAX_TENSOR_NDIM] = {0};
+
+        // Convert shape float tensor into int arr
+        for (int i = 0; i < new_ndim; ++i)
+            new_shape[i] = (int)shape_tensor->data[i];
+        res = mt_tensor_alloc_values(input1->shape, input1->ndim, input1->data);
+        mt_tensor_reshape_inplace(res, new_shape, new_ndim);
+
         model->tensors[l->outputs[0]] = res;
         break;
     }
@@ -1993,6 +2092,14 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
         mt_relu_inplace(res);
+        model->tensors[l->outputs[0]] = res;
+        break;
+    }
+    case MT_LAYER_SOFTMAX: {
+        mt_tensor *input = model->tensors[l->inputs[0]];
+        res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
+        DEBUG_LOG("softmax is not implemented yet, so it is an identity "
+                  "function now");
         model->tensors[l->outputs[0]] = res;
         break;
     }
@@ -2060,6 +2167,29 @@ void mt_model_set_input(mt_model *model, const char *name, mt_tensor *t) {
     mt_tensor *t_copy = mt_tensor_alloc_values(t->shape, t->ndim, t->data);
     model->tensors[input_tensor_idx] = t_copy;
 }
+
+void mt_layer_debug_info(mt_layer *l) {
+    printf("ID          : %d\n", l->id);
+    printf("kind        : %d\n", l->kind);
+    printf("input count : %d\n", l->input_count);
+    printf("inputs      : [");
+    for (int i = 0; i < l->input_count; ++i) {
+        printf("%d", l->inputs[i]);
+        if (i < l->input_count - 1)
+            printf(", ");
+    }
+    printf("]\n");
+
+    printf("outputs     : [");
+    for (int i = 0; i < l->output_count; ++i) {
+        printf("%d", l->outputs[i]);
+        if (i < l->output_count - 1)
+            printf(", ");
+    }
+    printf("]\n");
+    printf("\n");
+}
+
 #endif // !__MT_IMPLEMENTATION
 
 #ifdef __cplusplus

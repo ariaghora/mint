@@ -9,7 +9,7 @@ SRC = $(TARGET).c
 
 all: $(TARGET).out
 
-$(TARGET).out: $(SRC)
+$(TARGET).out: $(SRC) ../../mint.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 clean:
