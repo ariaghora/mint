@@ -499,16 +499,30 @@ typedef struct mt_model {
 
 #define DEBUG_LOG_F(format, ...)                                               \
     do {                                                                       \
-        fprintf(stderr, "\x1b[33m");                                           \
         fprintf(stderr, "DEBUG [%s:%d]: ", __FILE__, __LINE__);                \
         fprintf(stderr, format, __VA_ARGS__);                                  \
-        fprintf(stderr, "\x1b[0m\n");                                          \
+        fprintf(stderr, "\n");                                                 \
     } while (0)
 
 #define DEBUG_LOG(msg)                                                         \
     do {                                                                       \
-        fprintf(stderr, "\x1b[33m");                                           \
         fprintf(stderr, "DEBUG [%s:%d]: ", __FILE__, __LINE__);                \
+        fprintf(stderr, msg);                                                  \
+        fprintf(stderr, "\n");                                                 \
+    } while (0)
+
+#define WARN_LOG_F(format, ...)                                                \
+    do {                                                                       \
+        fprintf(stderr, "\x1b[33m");                                           \
+        fprintf(stderr, "WARNING [%s:%d]: ", __FILE__, __LINE__);              \
+        fprintf(stderr, format, __VA_ARGS__);                                  \
+        fprintf(stderr, "\x1b[0m\n");                                          \
+    } while (0)
+
+#define WARN_LOG(msg)                                                          \
+    do {                                                                       \
+        fprintf(stderr, "\x1b[33m");                                           \
+        fprintf(stderr, "WARNING [%s:%d]: ", __FILE__, __LINE__);              \
         fprintf(stderr, msg);                                                  \
         fprintf(stderr, "\x1b[0m\n");                                          \
     } while (0)
@@ -545,7 +559,7 @@ typedef struct mt_model {
     do {                                                                       \
         fprintf(stderr,                                                        \
                 "\x1b[31m"                                                     \
-                "[ERROR] " fmt ": %s\n"                                        \
+                "[ERROR] " fmt "\n"                                            \
                 "\x1b[0m",                                                     \
                 __VA_ARGS__);                                                  \
         exit(1);                                                               \
@@ -2357,7 +2371,7 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         // Convert shape float tensor into int arr
         for (int i = 0; i < pads_len; ++i)
             pads_int[i] = (int)pads->data[i];
-        DEBUG_LOG("WARNING: currently pad mode is always reflect");
+        WARN_LOG("currently pad mode is always reflect");
         res = mt_tensor_pad(input, pads_int, MT_PAD_REFLECT, 0.0);
 
         model->tensors[l->outputs[0]] = res;
@@ -2450,14 +2464,13 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
     case MT_LAYER_SOFTMAX: {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
-        DEBUG_LOG("softmax is not implemented yet, so it is an identity "
-                  "function now");
+        WARN_LOG("softmax is not implemented yet, so it is an identity "
+                 "function now");
         model->tensors[l->outputs[0]] = res;
         break;
     }
     default:
-        printf("Cannot execute layer with type %d yet\n", l->kind);
-        exit(1);
+        ERROR_F("Cannot execute layer with type %d yet\n", l->kind);
     }
 }
 
