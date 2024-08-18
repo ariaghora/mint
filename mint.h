@@ -1,4 +1,5 @@
 /*
+ * ad ima
 
                                 M I N T
 
@@ -166,8 +167,6 @@ operation.
 #ifndef _MINT_H_
 #define _MINT_H_
 
-#include <stdio.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -255,9 +254,6 @@ mt_tensor *mt_tensor_alloc_random(int *shape, int ndim);
 int        mt_tensor_count_element(mt_tensor *t);
 // Helper function to print tensor summary
 void       mt_tensor_debug_info(mt_tensor *t);
-// Helper function to read tensor from a file pointer. The file need to obey
-// a certain format.
-mt_tensor *mt_tensor_fread(FILE *fp);
 // Free tensor
 void       mt_tensor_free(mt_tensor *t);
 // Load image as a tensor with shape of CxHxW. C is the number of channel, H
@@ -281,46 +277,46 @@ void       mt_tensor_unsqueeze_inplace(mt_tensor *t, int axis);
 
 typedef struct mt_model mt_model;
 
-#define LAYER_TYPES(X)                                                         \
-    X(MT_LAYER_UNKNOWN)                                                        \
-    X(MT_LAYER_ADD)                                                            \
-    X(MT_LAYER_AVG_POOL_2D)                                                    \
-    X(MT_LAYER_CAST)                                                           \
-    X(MT_LAYER_CONCAT)                                                         \
-    X(MT_LAYER_CONSTANT)                                                       \
-    X(MT_LAYER_CONV_2D)                                                        \
-    X(MT_LAYER_DENSE)                                                          \
-    X(MT_LAYER_DIV)                                                            \
-    X(MT_LAYER_DROPOUT)                                                        \
-    X(MT_LAYER_EXP)                                                            \
-    X(MT_LAYER_FLATTEN)                                                        \
-    X(MT_LAYER_GLOBAL_AVG_POOL)                                                \
-    X(MT_LAYER_INSTANCE_NORMALIZATION)                                         \
-    X(MT_LAYER_LEAKY_RELU)                                                     \
-    X(MT_LAYER_LOCAL_RESPONSE_NORM)                                            \
-    X(MT_LAYER_LOG)                                                            \
-    X(MT_LAYER_MAX_POOL_2D)                                                    \
-    X(MT_LAYER_MUL)                                                            \
-    X(MT_LAYER_PAD)                                                            \
-    X(MT_LAYER_RELU)                                                           \
-    X(MT_LAYER_RESHAPE)                                                        \
-    X(MT_LAYER_RESIZE)                                                         \
-    X(MT_LAYER_SIGMOID)                                                        \
-    X(MT_LAYER_SOFTMAX)                                                        \
-    X(MT_LAYER_SUB)                                                            \
-    X(MT_LAYER_TANH)                                                           \
-    X(MT_LAYER_TRANSPOSE)
+#define LAYER_TYPES(T)                                                         \
+    T(MT_LAYER_UNKNOWN)                                                        \
+    T(MT_LAYER_ADD)                                                            \
+    T(MT_LAYER_AVG_POOL_2D)                                                    \
+    T(MT_LAYER_CAST)                                                           \
+    T(MT_LAYER_CONCAT)                                                         \
+    T(MT_LAYER_CONSTANT)                                                       \
+    T(MT_LAYER_CONV_2D)                                                        \
+    T(MT_LAYER_DENSE)                                                          \
+    T(MT_LAYER_DIV)                                                            \
+    T(MT_LAYER_DROPOUT)                                                        \
+    T(MT_LAYER_EXP)                                                            \
+    T(MT_LAYER_FLATTEN)                                                        \
+    T(MT_LAYER_GLOBAL_AVG_POOL)                                                \
+    T(MT_LAYER_INSTANCE_NORMALIZATION)                                         \
+    T(MT_LAYER_LEAKY_RELU)                                                     \
+    T(MT_LAYER_LOCAL_RESPONSE_NORM)                                            \
+    T(MT_LAYER_LOG)                                                            \
+    T(MT_LAYER_MAX_POOL_2D)                                                    \
+    T(MT_LAYER_MUL)                                                            \
+    T(MT_LAYER_PAD)                                                            \
+    T(MT_LAYER_RELU)                                                           \
+    T(MT_LAYER_RESHAPE)                                                        \
+    T(MT_LAYER_RESIZE)                                                         \
+    T(MT_LAYER_SIGMOID)                                                        \
+    T(MT_LAYER_SOFTMAX)                                                        \
+    T(MT_LAYER_SUB)                                                            \
+    T(MT_LAYER_TANH)                                                           \
+    T(MT_LAYER_TRANSPOSE)
 
 typedef enum {
-#define X(name) name,
-    LAYER_TYPES(X)
-#undef X
+#define T(name) name,
+    LAYER_TYPES(T)
+#undef T
 } mt_layer_kind;
 
 static const char *mt_layer_kind_strings[] = {
-#define X(name) #name,
-    LAYER_TYPES(X)
-#undef X
+#define T(name) #name,
+    LAYER_TYPES(T)
+#undef T
 };
 
 mt_model  *mt_model_load(const char *filename, int input_in_batch);
@@ -343,6 +339,7 @@ void mt_layer_debug_info(mt_layer *l);
 #include <limits.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -1652,7 +1649,7 @@ mt_tensor *mt__permute_3d(mt_tensor *input, const int *dims) {
                                input->shape[dims[2]]};
     mt_tensor *output       = mt_tensor_alloc(new_shape, 3);
 
-    int d = input->shape[0], h = input->shape[1], w = input->shape[2];
+    int h = input->shape[1], w = input->shape[2];
     int new_d = new_shape[0], new_h = new_shape[1], new_w = new_shape[2];
 
     for (int i = 0; i < new_d; i++) {
@@ -1678,8 +1675,7 @@ mt_tensor *mt__permute_4d(mt_tensor *input, const int *dims) {
                                input->shape[dims[2]], input->shape[dims[3]]};
     mt_tensor *output       = mt_tensor_alloc(new_shape, 4);
 
-    int a = input->shape[0], b = input->shape[1], c = input->shape[2],
-        d     = input->shape[3];
+    int b = input->shape[1], c = input->shape[2], d = input->shape[3];
     int new_a = new_shape[0], new_b = new_shape[1], new_c = new_shape[2],
         new_d = new_shape[3];
 
@@ -1970,8 +1966,7 @@ mt_tensor *mt_tensor_load_image(char *filename) {
     int            w, h, c;
     unsigned char *data = stbi_load(filename, &w, &h, &c, 0);
     if (data == NULL) {
-        printf("ERROR: cannot load %s\n", filename);
-        exit(1);
+        ERROR_F("cannot load %s: %s", filename, stbi_failure_reason());
     }
 
     mt_tensor *t = mt_tensor_alloc(MT_ARR_INT(c, h, w), 3);
@@ -2086,7 +2081,7 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             model->tensors[b_idx]    = mt_tensor_memread(&mp);
         } else if (layer->kind == MT_LAYER_DROPOUT) {
             // nothing to read
-            DEBUG_LOG_F("currently no information is written for dropout", "");
+            WARN_LOG("currently no information is written for dropout");
         } else if (layer->kind == MT_LAYER_EXP) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_LOCAL_RESPONSE_NORM) {
@@ -2405,7 +2400,11 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         mt_tensor *input = model->tensors[l->inputs[0]];
         MT_ASSERT(input->ndim == 4, "can only resize 4-D tensor for now");
 
-        mt_tensor *roi    = model->tensors[l->inputs[1]];
+        mt_tensor *roi = model->tensors[l->inputs[1]];
+        MT_ASSERT(roi->data[4] == 1 && roi->data[5] == 1 && roi->data[6] &&
+                      roi->data[7] == 1,
+                  "cannot handle non 1 roi yet");
+
         mt_tensor *scales = model->tensors[l->inputs[2]];
 
         if (scales != NULL)
