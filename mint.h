@@ -2059,6 +2059,8 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
 
     mt_reader mp    = (mt_reader){model_bytes, 0, len};
     mt_model *model = (mt_model *)malloc(sizeof(*model));
+    for (int i = 0; i < MAX_MODEL_INITIALIZER_COUNT; ++i)
+        model->tensors[i] = NULL;
 
     // First, we read model header.
     mt_reader_read(&model->layer_count, sizeof(int), 1, &mp);
@@ -2227,7 +2229,7 @@ mt_model *mt_model_load(const char *filename, int input_in_batch) {
 }
 
 void mt_model_free(mt_model *model) {
-    for (int i = 0; i < model->tensor_count; ++i) {
+    for (int i = 0; i < MAX_MODEL_INITIALIZER_COUNT; ++i) {
         if (model->tensors[i] != NULL)
             mt_tensor_free(model->tensors[i]);
     }
