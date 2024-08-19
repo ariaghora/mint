@@ -719,6 +719,34 @@ static void mt__binop_3d(mt_float *a, int *a_shape, mt_float *b, int *b_shape,
 // NOTE(Aria): This is meant to be used internally.
 mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
                      mt_float f(mt_float, mt_float)) {
+
+    /*
+     * We first check if we have ideal condition, i.e., both tensors have
+     * identical shape
+     */
+    int same_shape = 1;
+    int ndim       = a->ndim > b->ndim ? a->ndim : b->ndim;
+    for (int i = 0; i < ndim; ++i) {
+        if (a->shape[i] != b->shape[i]) {
+            same_shape = 0;
+            break;
+        }
+    }
+    if ((a->ndim == b->ndim) && same_shape) {
+        mt_tensor *result = mt_tensor_alloc(a->shape, a->ndim);
+        int        numel  = mt_tensor_count_element(a);
+#pragma omp parallel for
+        for (int i = 0; i < numel; ++i) {
+            result->data[i] = f(a->data[i], b->data[i]);
+        }
+
+        /* try to return early */
+        return result;
+    }
+
+    /*
+     * Otherwise, try broadcasting
+     */
     int result_shape[MAX_TENSOR_NDIM];
     int result_ndim;
     mt__calc_broadcast_shape(a->shape, a->ndim, b->shape, b->ndim, result_shape,
@@ -922,6 +950,38 @@ mt_tensor *mt_concat(mt_tensor **inputs, int num_inputs, int axis) {
     return output;
 }
 
+// Optimized im2col preparation
+void mt__im2col(const mt_float *data, const int C_in, const int H_in,
+                const int W_in, const int K_h, const int K_w, const int stride,
+                const int pad_h_begin, const int pad_w_begin, const int H_out,
+                const int W_out, mt_float *im2col_data) {
+    const int channels_col = C_in * K_h * K_w;
+    const int output_size  = H_out * W_out;
+
+#pragma omp parallel for collapse(2)
+    for (int c = 0; c < channels_col; ++c) {
+        for (int output_idx = 0; output_idx < output_size; ++output_idx) {
+            int w_out = output_idx % W_out;
+            int h_out = output_idx / W_out;
+            int c_in  = c / (K_h * K_w);
+            int k_idx = c % (K_h * K_w);
+            int k_h   = k_idx / K_w;
+            int k_w   = k_idx % K_w;
+
+            int h_in = h_out * stride + k_h - pad_h_begin;
+            int w_in = w_out * stride + k_w - pad_w_begin;
+
+            int im2col_idx = c * output_size + output_idx;
+            if (h_in >= 0 && h_in < H_in && w_in >= 0 && w_in < W_in) {
+                int data_idx            = (c_in * H_in + h_in) * W_in + w_in;
+                im2col_data[im2col_idx] = data[data_idx];
+            } else {
+                im2col_data[im2col_idx] = 0;
+            }
+        }
+    }
+}
+
 mt_tensor *mt_convolve_2d_single(mt_tensor *x, mt_tensor *w, mt_tensor *b,
                                  int stride, int *pads) {
     MT_ASSERT(x->ndim == 3, "Input tensor must be 3-dimensional");
@@ -956,27 +1016,8 @@ mt_tensor *mt_convolve_2d_single(mt_tensor *x, mt_tensor *w, mt_tensor *b,
     mt_tensor *im2col =
         mt_tensor_alloc(MT_ARR_INT(im2col_rows, im2col_cols), 2);
 
-#pragma omp parallel for collapse(2)
-    // Perform im2col operation
-    for (int i = 0; i < im2col_cols; i++) {
-        for (int j = 0; j < im2col_rows; j++) {
-            int w_out = i % W_out;
-            int h_out = (i / W_out) % H_out;
-            int c_in  = j / (K_h * K_w);
-            int k_h   = (j / K_w) % K_h;
-            int k_w   = j % K_w;
-
-            int h_in = h_out * stride + k_h - pad_h_begin;
-            int w_in = w_out * stride + k_w - pad_w_begin;
-
-            if (h_in >= 0 && h_in < H_in && w_in >= 0 && w_in < W_in) {
-                im2col->data[j * im2col_cols + i] =
-                    x->data[c_in * H_in * W_in + h_in * W_in + w_in];
-            } else {
-                im2col->data[j * im2col_cols + i] = 0;
-            }
-        }
-    }
+    mt__im2col(x->data, C_in, H_in, W_in, K_h, K_w, stride, pad_h_begin,
+               pad_w_begin, H_out, W_out, im2col->data);
 
     // Reshape weights
     mt_tensor *reshaped_w =
@@ -2635,6 +2676,7 @@ mt_tensor *mt_model_get_output(mt_model *model, const char *name) {
     return t_copy;
 }
 
+#include <time.h>
 void mt_model_run(mt_model *model) {
     int  sorted_ids[MAX_LAYER_COUNT] = {0};
     int *sorted_len_ptr = (int *)calloc(1, sizeof(*sorted_len_ptr));
@@ -2657,13 +2699,20 @@ void mt_model_run(mt_model *model) {
     }
 
     // Execute forward
+    double total_time = 0;
     for (int i = 0; i < *sorted_len_ptr; ++i) {
         mt_layer *l = model->layers[sorted_ids[i]];
 
         DEBUG_LOG_F("[%d/%d] executing layer id %d (type %s)", i + 1,
                     *sorted_len_ptr, l->id, mt_layer_kind_to_string(l->kind));
+        clock_t begin = clock();
         mt__layer_forward(l, model);
+        clock_t end        = clock();
+        double  time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
+        total_time += time_spent;
+        DEBUG_LOG_F("took %f", time_spent);
     }
+    DEBUG_LOG_F("total inference time: %f", total_time);
 
     free(sorted_len_ptr);
 }
