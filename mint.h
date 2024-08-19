@@ -482,6 +482,8 @@ typedef struct mt_model {
 #define MT_ASSERT_F(condition, format, ...) ((void)0)
 #define DEBUG_LOG_F(format, ...)            ((void)0)
 #define DEBUG_LOG(msg)                      ((void)0)
+#define WARN_LOG_F(format, ...)             ((void)0)
+#define WARN_LOG(msg)                       ((void)0)
 #else
 #define MT_ASSERT_F(condition, format, ...)                                    \
     do {                                                                       \
