@@ -1333,7 +1333,7 @@ mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b) {
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, m, n, k, 1.0f,
                 a->data, k, b->data, n, 0.0f, c->data, n);
 #else
-#pragma omp parallel for
+#pragma omp parallel for collapse(2)
     // Blocked matrix multiplication
     for (int i0 = 0; i0 < m; i0 += MATMUL_BLOCK_SIZE) {
         for (int j0 = 0; j0 < n; j0 += MATMUL_BLOCK_SIZE) {
