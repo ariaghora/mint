@@ -173,6 +173,8 @@ extern "C" {
 // The tensor values data type
 #ifndef mt_float
 #define mt_float float
+// Positive infinity in IEEE-754 format for 32-bit floating number
+#define mt_float_max (*((float *)&(uint32_t){0x7F800000}))
 #endif
 
 /***************************************************************************
@@ -335,7 +337,6 @@ void mt_layer_debug_info(mt_layer *l);
 
 #ifdef MT_IMPLEMENTATION
 
-#include <limits.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -707,7 +708,7 @@ static void mt__binop_3d(mt_float *a, int *a_shape, mt_float *b, int *b_shape,
 }
 
 // General binary operator.
-// NOTE (Aria): This is meant to be used internally.
+// NOTE(Aria): This is meant to be used internally.
 mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
                      mt_float f(mt_float, mt_float)) {
     int result_shape[MAX_TENSOR_NDIM];
@@ -912,6 +913,7 @@ mt_tensor *mt_concat(mt_tensor **inputs, int num_inputs, int axis) {
 
     return output;
 }
+
 mt_tensor *mt_convolve_2d_single(mt_tensor *x, mt_tensor *w, mt_tensor *b,
                                  int stride, int *pads) {
     MT_ASSERT(x->ndim == 3, "Input tensor must be 3-dimensional");
@@ -1083,56 +1085,6 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
     return output;
 }
 
-mt_tensor *mt__matmul_backend(mt_tensor *a, mt_tensor *b) {
-    int m = a->ndim == 1 ? 1 : a->shape[0];
-    int n = b->ndim == 1 ? b->shape[0] : b->shape[1];
-    int k = a->ndim == 1 ? a->shape[0] : a->shape[1];
-
-    int tda = a->ndim == 1 ? a->shape[0] : a->shape[1];
-    int ldb = b->ndim == 1 ? 1 : b->shape[0];
-
-    MT_ASSERT_F(a->ndim <= 2, "A must have <= 2 dimensions, got %d dimension",
-                a->ndim);
-    MT_ASSERT_F(b->ndim <= 2, "A must have <= 2 dimensions, got %d dimension",
-                b->ndim);
-    MT_ASSERT_F(tda == ldb,
-                "incompatible shape for matrix multiplication (%d and %d)", tda,
-                ldb);
-
-    mt_tensor *c = mt_tensor_alloc(MT_ARR_INT(m, n), 2);
-
-#ifdef MT_USE_BLAS
-    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, m, n, k, 1.0f,
-                a->data, k, b->data, n, 0.0f, c->data, n);
-#else
-#pragma omp parallel for
-    // Blocked matrix multiplication
-    for (int i0 = 0; i0 < m; i0 += MATMUL_BLOCK_SIZE) {
-        for (int j0 = 0; j0 < n; j0 += MATMUL_BLOCK_SIZE) {
-            for (int k0 = 0; k0 < k; k0 += MATMUL_BLOCK_SIZE) {
-                int max_i =
-                    (i0 + MATMUL_BLOCK_SIZE < m) ? i0 + MATMUL_BLOCK_SIZE : m;
-                int max_j =
-                    (j0 + MATMUL_BLOCK_SIZE < n) ? j0 + MATMUL_BLOCK_SIZE : n;
-                int max_k =
-                    (k0 + MATMUL_BLOCK_SIZE < k) ? k0 + MATMUL_BLOCK_SIZE : k;
-
-                for (int i = i0; i < max_i; i++) {
-                    for (int k = k0; k < max_k; k++) {
-                        float a_ik = a->data[i * tda + k];
-                        for (int j = j0; j < max_j; j++) {
-                            c->data[i * n + j] += a_ik * b->data[k * n + j];
-                        }
-                    }
-                }
-            }
-        }
-    }
-#endif
-
-    return c;
-}
-
 static mt_float mt__s_div(mt_float a, mt_float b) { return a / b; }
 mt_tensor      *mt_div(mt_tensor *a, mt_tensor *b) {
     return mt__binop(a, b, mt__s_div);
@@ -1152,8 +1104,8 @@ mt_tensor *mt_global_avg_pool_2d(mt_tensor *x) {
     // Allocate output tensor of shape (N, C, 1, 1)
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(N, C, 1, 1), 4);
 
-// Perform global average pooling for each sample in the batch
 #pragma omp parallel for collapse(2)
+    // Perform global average pooling for each sample in the batch
     for (int n = 0; n < N; n++) {
         for (int c = 0; c < C; c++) {
             mt_float sum = 0.0f;
@@ -1356,10 +1308,65 @@ mt_tensor *mt_local_response_norm(mt_tensor *t, int size, mt_float alpha,
 }
 
 mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b) {
-    return mt__matmul_backend(a, b);
+    int m = a->ndim == 1 ? 1 : a->shape[0];
+    int n = b->ndim == 1 ? b->shape[0] : b->shape[1];
+    int k = a->ndim == 1 ? a->shape[0] : a->shape[1];
+
+    int tda = a->ndim == 1 ? a->shape[0] : a->shape[1];
+    int ldb = b->ndim == 1 ? 1 : b->shape[0];
+
+    MT_ASSERT_F(a->ndim <= 2, "A must have <= 2 dimensions, got %d dimension",
+                a->ndim);
+    MT_ASSERT_F(b->ndim <= 2, "A must have <= 2 dimensions, got %d dimension",
+                b->ndim);
+    MT_ASSERT_F(tda == ldb,
+                "incompatible shape for matrix multiplication (%d and %d)", tda,
+                ldb);
+
+    mt_tensor *c = mt_tensor_alloc(MT_ARR_INT(m, n), 2);
+
+#ifdef MT_USE_BLAS
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, m, n, k, 1.0f,
+                a->data, k, b->data, n, 0.0f, c->data, n);
+#else
+#pragma omp parallel for
+    // Blocked matrix multiplication
+    for (int i0 = 0; i0 < m; i0 += MATMUL_BLOCK_SIZE) {
+        for (int j0 = 0; j0 < n; j0 += MATMUL_BLOCK_SIZE) {
+            for (int k0 = 0; k0 < k; k0 += MATMUL_BLOCK_SIZE) {
+                int max_i =
+                    (i0 + MATMUL_BLOCK_SIZE < m) ? i0 + MATMUL_BLOCK_SIZE : m;
+                int max_j =
+                    (j0 + MATMUL_BLOCK_SIZE < n) ? j0 + MATMUL_BLOCK_SIZE : n;
+                int max_k =
+                    (k0 + MATMUL_BLOCK_SIZE < k) ? k0 + MATMUL_BLOCK_SIZE : k;
+
+                for (int i = i0; i < max_i; i++) {
+                    for (int k = k0; k < max_k; k++) {
+                        float a_ik = a->data[i * tda + k];
+                        for (int j = j0; j < max_j; j++) {
+                            c->data[i * n + j] += a_ik * b->data[k * n + j];
+                        }
+                    }
+                }
+            }
+        }
+    }
+#endif
+
+    return c;
 }
 
 mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int *pads) {
+    /* This function performs 2D max pooling on a 4D input tensor (NCHW format).
+     * It slides a kernel over the input, selecting the maximum value in each of
+     * the window.
+     *
+     * x: Input tensor in NCHW format (Batch, Channels, Height, Width)
+     * kernel_size: Size of the pooling window (assumed square)
+     * stride: Step size of the kernel
+     * pads: Array of padding values [pad_top, pad_left, pad_bottom, pad_right]
+     */
     MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional (NCHW format)");
 
     int N    = x->shape[0]; // Batch size
@@ -1385,15 +1392,23 @@ mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int *pads) {
             for (int h_out = 0; h_out < H_out; h_out++) {
                 for (int w_out = 0; w_out < W_out; w_out++) {
                     mt_float max_val = -INFINITY;
+
+                    // Iterate over the pooling window
                     for (int kh = 0; kh < kernel_size; kh++) {
                         for (int kw = 0; kw < kernel_size; kw++) {
+                            // Calculate input indices, accounting for padding
                             int h_in = h_out * stride + kh - pad_h_begin;
                             int w_in = w_out * stride + kw - pad_w_begin;
+
+                            // Check if the input position is within bounds
                             if (h_in >= 0 && h_in < H_in && w_in >= 0 &&
                                 w_in < W_in) {
+                                // Get the value from the input tensor
                                 mt_float val =
                                     x->data[((n * C + c) * H_in + h_in) * W_in +
                                             w_in];
+
+                                // Update current max val
                                 if (val > max_val) {
                                     max_val = val;
                                 }
@@ -1414,11 +1429,20 @@ mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int *pads) {
 
 mt_tensor *mt_tensor_pad(mt_tensor *t, int *pads, mt_pad_mode mode,
                          mt_float constant_val) {
+    /* This function pads a tensor with up to 4 dimensions.
+     *
+     * t: Input tensor to be padded
+     * pads: Array specifying padding for each dimension (before and after)
+     * mode: Padding mode (only MT_PAD_REFLECT is implemented for now)
+     * constant_val: Value for constant padding (unused in reflect mode)
+     */
+
+    // Ensure the input tensor has 4 or fewer dimensions
     MT_ASSERT(t->ndim <= 4, "Input tensor must have 4 or fewer dimensions");
 
     switch (mode) {
     case MT_PAD_REFLECT: {
-        // Calculate new dimensions
+        // Calculate new dimensions after padding
         int new_dims[4] = {0};
         for (int i = 0; i < t->ndim; i++) {
             new_dims[i] = t->shape[i] + pads[i] + pads[i + t->ndim];
@@ -1430,10 +1454,15 @@ mt_tensor *mt_tensor_pad(mt_tensor *t, int *pads, mt_pad_mode mode,
         // Pad the tensor
         switch (t->ndim) {
         case 1: {
+            /* For 1D tensors, we reflect values at the boundaries.
+             * If we go out of bounds on either side, we "bounce" back.
+             */
             for (int i = 0; i < new_dims[0]; i++) {
                 int idx = i - pads[0];
+                // Reflect on left boundary
                 if (idx < 0)
                     idx = -idx;
+                // Reflect on right boundary
                 else if (idx >= t->shape[0])
                     idx = 2 * t->shape[0] - 2 - idx;
                 padded->data[i] = t->data[idx];
@@ -1441,6 +1470,9 @@ mt_tensor *mt_tensor_pad(mt_tensor *t, int *pads, mt_pad_mode mode,
             break;
         }
         case 2: {
+            /* For 2D tensors, we need to reflect in both dimensions.
+             * This is often used for image padding.
+             */
             int h = t->shape[0], w = t->shape[1];
             int new_h = new_dims[0], new_w = new_dims[1];
             int pad_top = pads[0], pad_left = pads[1];
@@ -1474,6 +1506,9 @@ mt_tensor *mt_tensor_pad(mt_tensor *t, int *pads, mt_pad_mode mode,
             break;
         }
         case 3: {
+            /* For 3D tensors, we reflect in all three dimensions.
+             * This could be used for volumetric data or multi-channel images.
+             */
             for (int i = 0; i < new_dims[0]; i++) {
                 int idx_i = i - pads[0];
                 if (idx_i < 0)
@@ -1502,6 +1537,10 @@ mt_tensor *mt_tensor_pad(mt_tensor *t, int *pads, mt_pad_mode mode,
             break;
         }
         case 4: {
+            /* For 4D tensors, we reflect in all four dimensions.
+             * This could be used for batches of multi-channel images or video
+             * data.
+             */
             for (int n = 0; n < new_dims[0]; n++) {
                 int idx_n = n - pads[0];
                 if (idx_n < 0)
@@ -1737,7 +1776,7 @@ mt_tensor      *mt_sub(mt_tensor *a, mt_tensor *b) {
 }
 
 // Helper function to handle negative indices and clamping
-static int adjust_index(int index, int dim, int step) {
+static int mt__adjust_index(int index, int dim, int step) {
     if (index < 0) {
         index += dim;
     }
@@ -1775,17 +1814,11 @@ mt_tensor *mt_tensor_slice(mt_tensor *input, int *starts, int *ends, int *axes,
         if (axis < 0)
             axis += rank;
 
-        effective_starts[axis] =
-            adjust_index(starts[i], input->shape[axis], steps ? steps[i] : 1);
+        effective_starts[axis] = mt__adjust_index(starts[i], input->shape[axis],
+                                                  steps ? steps[i] : 1);
         effective_ends[axis] =
-            adjust_index(ends[i], input->shape[axis], steps ? steps[i] : 1);
+            mt__adjust_index(ends[i], input->shape[axis], steps ? steps[i] : 1);
         effective_steps[axis] = steps ? steps[i] : 1;
-
-        // Handle INT_MAX and INT_MIN for ends
-        if (ends[i] == INT_MAX)
-            effective_ends[axis] = input->shape[axis];
-        if (ends[i] == INT_MIN)
-            effective_ends[axis] = -1;
 
         // Calculate output shape
         int slice_length = (effective_ends[axis] - effective_starts[axis] +
