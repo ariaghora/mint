@@ -1207,7 +1207,8 @@ mt_tensor *mt_image_resize(mt_tensor *img, int target_height,
         dx[x]     = src_x[x] - src_x0[x];
     }
 
-    // Main resizing loop
+// Main resizing loop
+#pragma omp parallel for
     for (int c = 0; c < channels; c++) {
         mt_float *src_channel = img->data + c * src_height * src_width;
         mt_float *dst_channel =
@@ -1269,15 +1270,16 @@ mt_tensor *mt_instance_normalize(mt_tensor *t, mt_tensor *scale, mt_tensor *b,
     MT_ASSERT(b->ndim == 1 && b->shape[0] == t->shape[1],
               "Bias tensor must be 1D with size equal to number of channels");
 
-    int N = t->shape[0];
-    int C = t->shape[1];
-    int H = t->ndim > 2 ? t->shape[2] : 1;
-    int W = t->ndim > 3 ? t->shape[3] : 1;
+    int N    = t->shape[0];
+    int C    = t->shape[1];
+    int H    = t->ndim > 2 ? t->shape[2] : 1;
+    int W    = t->ndim > 3 ? t->shape[3] : 1;
+    int area = H * W;
 
     mt_tensor *output = mt_tensor_alloc(t->shape, t->ndim);
 
-#pragma omp parallel for collapse(2)
     for (int n = 0; n < N; n++) {
+#pragma omp parallel for collapse(2)
         for (int c = 0; c < C; c++) {
             // Compute mean
             mt_float sum = 0.0f;
@@ -1287,7 +1289,7 @@ mt_tensor *mt_instance_normalize(mt_tensor *t, mt_tensor *scale, mt_tensor *b,
                     sum += t->data[idx];
                 }
             }
-            mt_float mean = sum / (H * W);
+            mt_float mean = sum / area;
 
             // Compute variance
             mt_float var_sum = 0.0f;
@@ -1810,11 +1812,13 @@ mt_tensor *mt_tensor_permute_dims(mt_tensor *t, int *dims) {
     }
 }
 
-void        mt_relu_inplace(mt_tensor *t) {
-    // in-place relu activation
-#pragma omp parallel for
-    for (int i = 0; i < mt_tensor_count_element(t); ++i) {
-        t->data[i] = t->data[i] >= 0 ? t->data[i] : 0;
+void mt_relu_inplace(mt_tensor *t) {
+    int       n    = mt_tensor_count_element(t);
+    mt_float *data = t->data;
+
+#pragma omp parallel for simd schedule(static)
+    for (int i = 0; i < n; ++i) {
+        data[i] = data[i] > 0 ? data[i] : 0;
     }
 }
 
