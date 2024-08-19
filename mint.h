@@ -950,8 +950,8 @@ mt_tensor *mt_convolve_2d_single(mt_tensor *x, mt_tensor *w, mt_tensor *b,
     mt_tensor *im2col =
         mt_tensor_alloc(MT_ARR_INT(im2col_rows, im2col_cols), 2);
 
-// Perform im2col operation
 #pragma omp parallel for collapse(2)
+    // Perform im2col operation
     for (int i = 0; i < im2col_cols; i++) {
         for (int j = 0; j < im2col_rows; j++) {
             int w_out = i % W_out;
@@ -1359,16 +1359,16 @@ mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b) {
     return c;
 }
 
+/* This function performs 2D max pooling on a 4D input tensor (NCHW format).
+ * It slides a kernel over the input, selecting the maximum value in each of
+ * the window.
+ *
+ * x: Input tensor in NCHW format (Batch, Channels, Height, Width)
+ * kernel_size: Size of the pooling window (assumed square)
+ * stride: Step size of the kernel
+ * pads: Array of padding values [pad_top, pad_left, pad_bottom, pad_right]
+ */
 mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int *pads) {
-    /* This function performs 2D max pooling on a 4D input tensor (NCHW format).
-     * It slides a kernel over the input, selecting the maximum value in each of
-     * the window.
-     *
-     * x: Input tensor in NCHW format (Batch, Channels, Height, Width)
-     * kernel_size: Size of the pooling window (assumed square)
-     * stride: Step size of the kernel
-     * pads: Array of padding values [pad_top, pad_left, pad_bottom, pad_right]
-     */
     MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional (NCHW format)");
 
     int N    = x->shape[0]; // Batch size
@@ -1429,16 +1429,15 @@ mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int *pads) {
     return output;
 }
 
+/* This function pads a tensor with up to 4 dimensions.
+ *
+ * t: Input tensor to be padded
+ * pads: Array specifying padding for each dimension (before and after)
+ * mode: Padding mode (only MT_PAD_REFLECT is implemented for now)
+ * constant_val: Value for constant padding (unused in reflect mode)
+ */
 mt_tensor *mt_tensor_pad(mt_tensor *t, int *pads, mt_pad_mode mode,
                          mt_float constant_val) {
-    /* This function pads a tensor with up to 4 dimensions.
-     *
-     * t: Input tensor to be padded
-     * pads: Array specifying padding for each dimension (before and after)
-     * mode: Padding mode (only MT_PAD_REFLECT is implemented for now)
-     * constant_val: Value for constant padding (unused in reflect mode)
-     */
-
     // Ensure the input tensor has 4 or fewer dimensions
     MT_ASSERT(t->ndim <= 4, "Input tensor must have 4 or fewer dimensions");
 
