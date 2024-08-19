@@ -2302,9 +2302,10 @@ void mt__auto_pad_to_explicit_paddings(mt__autopad_mode auto_pad,
         switch (auto_pad) {
         case MT_AUTOPAD_NOTSET:
             // No padding
-            pad_begin = 0;
-            pad_end   = 0;
-            break;
+            // pad_begin = 0;
+            // pad_end   = 0;
+            // break;
+            return;
 
         case MT_AUTOPAD_SAME_UPPER:
         case MT_AUTOPAD_SAME_LOWER: {
@@ -2344,8 +2345,9 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
 
     switch (l->kind) {
     case MT_LAYER_ADD: {
-        mt_tensor *a                  = model->tensors[l->inputs[0]];
-        mt_tensor *b                  = model->tensors[l->inputs[1]];
+        mt_tensor *a = model->tensors[l->inputs[0]];
+        mt_tensor *b = model->tensors[l->inputs[1]];
+
         res                           = mt_add(a, b);
         model->tensors[l->outputs[0]] = res;
         break;
@@ -2394,8 +2396,10 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
     }
     case MT_LAYER_DENSE: {
         mt_tensor *input = model->tensors[l->inputs[0]];
-        res              = mt_affine(input, model->tensors[l->data.dense.w_id],
-                                     model->tensors[l->data.dense.b_id]);
+        mt_tensor *w     = model->tensors[l->inputs[1]];
+        mt_tensor *b     = model->tensors[l->inputs[2]];
+
+        res                           = mt_affine(input, w, b);
         model->tensors[l->outputs[0]] = res;
         break;
     }
