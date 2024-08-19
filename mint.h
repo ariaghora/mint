@@ -343,15 +343,15 @@ void mt_layer_debug_info(mt_layer *l);
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_LAYER_COUNT 1000
-#define MAX_LAYER_INPUT_COUNT 10
-#define MAX_LAYER_OUTPUT_COUNT 10
-#define MAX_LAYER_PREV_COUNT 5
-#define MAX_LAYER_NEXT_COUNT 5
+#define MAX_LAYER_COUNT             1000
+#define MAX_LAYER_INPUT_COUNT       10
+#define MAX_LAYER_OUTPUT_COUNT      10
+#define MAX_LAYER_PREV_COUNT        5
+#define MAX_LAYER_NEXT_COUNT        5
 #define MAX_MODEL_INITIALIZER_COUNT 1500
-#define MAX_TENSOR_NDIM 5
-#define MAX_INPUT_OUTPUT_COUNT 5
-#define MAX_INPUT_OUTPUT_NAME_LEN 50
+#define MAX_TENSOR_NDIM             5
+#define MAX_INPUT_OUTPUT_COUNT      5
+#define MAX_INPUT_OUTPUT_NAME_LEN   50
 
 #define MATMUL_BLOCK_SIZE 64
 
@@ -365,9 +365,9 @@ typedef struct mt_tensor {
 typedef struct mt_layer {
     int           id;
     mt_layer_kind kind;
-    // This member holds data of different layer types. Some layers do not
-    // have any data/attribute to store, such as ReLU, simple binary
-    // operations, etc. In that case, they are not listed here.
+    /* This member holds data of different layer types. Some layers do not
+     * have any data/attribute to store, such as ReLU, simple binary
+     * operations, etc. In that case, they are not listed here. */
     union {
         // MT_LAYER_AVG_POOL_2D
         struct {
@@ -473,13 +473,13 @@ typedef struct mt_model {
     } outputs[10];
 } mt_model;
 
-#define MT_ARR_INT(...) ((int[]){__VA_ARGS__})
+#define MT_ARR_INT(...)   ((int[]){__VA_ARGS__})
 #define MT_ARR_FLOAT(...) ((mt_float[]){__VA_ARGS__})
 
 #ifdef NDEBUG
 #define MT_ASSERT_F(condition, format, ...) ((void)0)
-#define DEBUG_LOG_F(format, ...) ((void)0)
-#define DEBUG_LOG(msg) ((void)0)
+#define DEBUG_LOG_F(format, ...)            ((void)0)
+#define DEBUG_LOG(msg)                      ((void)0)
 #else
 #define MT_ASSERT_F(condition, format, ...)                                    \
     do {                                                                       \
