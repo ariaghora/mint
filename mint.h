@@ -343,6 +343,10 @@ void mt_layer_debug_info(mt_layer *l);
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef MT_USE_OPEN_MP
+#include <omp.h>
+#endif
+
 #define MAX_LAYER_COUNT             1000
 #define MAX_LAYER_INPUT_COUNT       10
 #define MAX_LAYER_OUTPUT_COUNT      10
@@ -2106,7 +2110,7 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             layer->data.conv_2d.w_id = w_idx;
             layer->data.conv_2d.b_id = b_idx;
         } else if (layer->kind == MT_LAYER_DENSE) {
-            int w_idx = layer->inputs[1];
+            // nothing to read
         } else if (layer->kind == MT_LAYER_DROPOUT) {
             // nothing to read
             WARN_LOG("currently no information is written for dropout");
@@ -2365,8 +2369,8 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         break;
     }
     case MT_LAYER_CONSTANT: {
-        // do nothing
-        // TODO(Aria): explain why do nothing
+        // do nothing, because the output tensor (the constant) is already
+        // dumped in tensors section by the dump script
         break;
     }
     case MT_LAYER_CONV_2D: {
@@ -2540,12 +2544,12 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         MT_ASSERT(input->ndim == 4, "can only resize 4-D tensor for now");
 
         mt_tensor *roi = model->tensors[l->inputs[1]];
-        MT_ASSERT(roi->data[4] == 1 && roi->data[5] == 1 && roi->data[6] &&
-                      roi->data[7] == 1,
-                  "cannot handle non 1 roi yet");
+        if (roi != NULL)
+            MT_ASSERT(roi->data[4] == 1 && roi->data[5] == 1 && roi->data[6] &&
+                          roi->data[7] == 1,
+                      "cannot handle non 1 roi yet");
 
         mt_tensor *scales = model->tensors[l->inputs[2]];
-
         if (scales != NULL)
             MT_ASSERT(mt_tensor_count_element(scales) == 4,
                       "scales must have 4 elements");

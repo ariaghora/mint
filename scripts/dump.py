@@ -260,6 +260,9 @@ def write_concat(
 def write_constant(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
+    # Move out attribute `value` into tensors
+    out_idx = node["outputs"][0]
+    tensors[out_idx] = node["attributes"]["value"]
     write_layer_header(f, LayerKind.CONSTANT.value, node)
     print(f"wrote Constant {id}")
 
@@ -546,7 +549,6 @@ if __name__ == "__main__":
             if t is None:
                 continue
             else:
-                print(t.shape)
                 write_ndarray(f, t)
                 np.array(i, dtype=np.int32).tofile(f)
 
