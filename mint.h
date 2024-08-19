@@ -2055,13 +2055,6 @@ mt_tensor *mt_tensor_memread(mt_reader *mp) {
     return t;
 }
 
-typedef enum {
-    MT_AUTOPAD_NOTSET,
-    MT_AUTOPAD_VALID,
-    MT_AUTOPAD_SAME_UPPER,
-    MT_AUTOPAD_SAME_LOWER,
-} mt__autopad_mode;
-
 mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
                                  int input_in_batch) {
 
@@ -2070,17 +2063,7 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
 
     // First, we read model header.
     mt_reader_read(&model->layer_count, sizeof(int), 1, &mp);
-    mt_reader_read(&model->tensor_count, sizeof(int), 1, &mp);
-    DEBUG_LOG_F("model has %d nodes and %d tensors", model->layer_count,
-                model->tensor_count);
-
-    // read initializers
-    // mt_reader_read(&model->tensor_count, sizeof(int), 1, &mp);
-    // for (int i = 0; i < model->tensor_count; ++i) {
-    //     mt_tensor *t      = mt_tensor_memread(&mp);
-    //     model->tensors[i] = t;
-    //     mt_tensor_debug_info(t);
-    // }
+    DEBUG_LOG_F("model has %d node(s)", model->layer_count);
 
     // Read layers and tensors
     for (int i = 0; i < model->layer_count; ++i) {
@@ -2110,26 +2093,17 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
         } else if (layer->kind == MT_LAYER_CONSTANT) {
             int tensor_idx                  = layer->outputs[0];
             layer->data.constant.tensor_idx = tensor_idx;
-            mt_tensor *val                  = mt_tensor_memread(&mp);
-            model->tensors[tensor_idx]      = val;
         } else if (layer->kind == MT_LAYER_CONV_2D) {
             mt_reader_read(&layer->data.conv_2d.stride, sizeof(int), 1, &mp);
             mt_reader_read(&layer->data.conv_2d.auto_pad, sizeof(int), 1, &mp);
             mt_reader_read(&layer->data.conv_2d.pads, sizeof(int), 4, &mp);
 
             int w_idx                = layer->inputs[1];
-            layer->data.conv_2d.w_id = w_idx;
-            model->tensors[w_idx]    = mt_tensor_memread(&mp);
             int b_idx                = layer->inputs[2];
+            layer->data.conv_2d.w_id = w_idx;
             layer->data.conv_2d.b_id = b_idx;
-            model->tensors[b_idx]    = mt_tensor_memread(&mp);
         } else if (layer->kind == MT_LAYER_DENSE) {
-            int w_idx                = layer->inputs[1];
-            layer->data.conv_2d.w_id = w_idx;
-            model->tensors[w_idx]    = mt_tensor_memread(&mp);
-            int b_idx                = layer->inputs[2];
-            layer->data.conv_2d.b_id = b_idx;
-            model->tensors[b_idx]    = mt_tensor_memread(&mp);
+            int w_idx = layer->inputs[1];
         } else if (layer->kind == MT_LAYER_DROPOUT) {
             // nothing to read
             WARN_LOG("currently no information is written for dropout");
@@ -2148,9 +2122,9 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
             // nothing to read
         } else if (layer->kind == MT_LAYER_MAX_POOL_2D) {
             mt_reader_read(&layer->data.max_pool_2d.size, sizeof(int), 1, &mp);
-            mt_reader_read(&layer->data.max_pool_2d.auto_pad, sizeof(int), 1,
-                           &mp);
             mt_reader_read(&layer->data.max_pool_2d.stride, sizeof(int), 1,
+                           &mp);
+            mt_reader_read(&layer->data.max_pool_2d.auto_pad, sizeof(int), 1,
                            &mp);
             mt_reader_read(&layer->data.max_pool_2d.pads, sizeof(int), 4, &mp);
         } else if (layer->kind == MT_LAYER_MUL) {
@@ -2162,22 +2136,15 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
         } else if (layer->kind == MT_LAYER_INSTANCE_NORMALIZATION) {
             mt_reader_read(&layer->data.instance_normalization.eps,
                            sizeof(mt_float), 1, &mp);
-            int scale_idx             = layer->inputs[1];
-            model->tensors[scale_idx] = mt_tensor_memread(&mp);
-            int bias_idx              = layer->inputs[2];
-            model->tensors[bias_idx]  = mt_tensor_memread(&mp);
         } else if (layer->kind == MT_LAYER_LEAKY_RELU) {
             mt_reader_read(&layer->data.leaky_relu.alpha, sizeof(mt_float), 1,
                            &mp);
         } else if (layer->kind == MT_LAYER_PAD) {
-            int pads_idx             = layer->inputs[1];
-            model->tensors[pads_idx] = mt_tensor_memread(&mp);
+            // nothing to read
         } else if (layer->kind == MT_LAYER_RELU) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_RESHAPE) {
-            // nothing to read; the shape will be an input tensor
-            int shape_idx             = layer->inputs[1];
-            model->tensors[shape_idx] = mt_tensor_memread(&mp);
+            // nothing to read
         } else if (layer->kind == MT_LAYER_RESIZE) {
             mt_reader_read(&layer->data.resize.mode, sizeof(int), 1, &mp);
         } else if (layer->kind == MT_LAYER_SIGMOID) {
@@ -2209,6 +2176,17 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
         model->layers[i] = layer;
     }
 
+    // read initializers
+    mt_reader_read(&model->tensor_count, sizeof(int), 1, &mp);
+    DEBUG_LOG_F("model has %d tensor(s)", model->tensor_count);
+    for (int i = 0; i < model->tensor_count; ++i) {
+        int       *tensor_id_ptr = (int *)malloc(sizeof(*tensor_id_ptr));
+        mt_tensor *t             = mt_tensor_memread(&mp);
+        mt_reader_read(tensor_id_ptr, sizeof(int), 1, &mp);
+        model->tensors[*tensor_id_ptr] = t;
+        free(tensor_id_ptr);
+    }
+
     // read inputs and outputs
     mt_reader_read(&model->input_count, sizeof(int), 1, &mp);
     for (int i = 0; i < model->input_count; ++i) {
@@ -2216,6 +2194,7 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
                        MAX_INPUT_OUTPUT_NAME_LEN, &mp);
         mt_reader_read(&model->inputs[i].id, sizeof(int), 1, &mp);
     }
+
     mt_reader_read(&model->output_count, sizeof(int), 1, &mp);
     for (int i = 0; i < model->output_count; ++i) {
         mt_reader_read(&model->outputs[i].name, sizeof(char),
@@ -2295,32 +2274,57 @@ int mt__get_padding_for_dim(int in_size, int kernel_size, int stride) {
                : 0;
 }
 
+typedef enum {
+    MT_AUTOPAD_NOTSET,
+    MT_AUTOPAD_VALID,
+    MT_AUTOPAD_SAME_UPPER,
+    MT_AUTOPAD_SAME_LOWER,
+} mt__autopad_mode;
+
 // Convert auto_pad to explicit paddings
 void mt__auto_pad_to_explicit_paddings(mt__autopad_mode auto_pad,
                                        int *input_shape, int *kernel_shape,
                                        int *strides, int num_spatial_dims,
                                        int *output_paddings) {
-
-    if (auto_pad == MT_AUTOPAD_NOTSET)
-        return;
-
-    if (auto_pad == MT_AUTOPAD_VALID) {
-        for (int i = 0; i < num_spatial_dims * 2; i++) {
-            output_paddings[i] = 0;
-        }
-        return;
-    }
-
     for (int i = 0; i < num_spatial_dims; i++) {
-        int total_pad = mt__get_padding_for_dim(input_shape[i], kernel_shape[i],
-                                                strides[i]);
-        int pad_begin = total_pad / 2;
-        int pad_end   = total_pad - pad_begin;
+        int input_size  = input_shape[i];
+        int kernel_size = kernel_shape[i];
+        int stride      = strides[i];
+        int pad_begin, pad_end;
 
-        if (auto_pad == MT_AUTOPAD_SAME_LOWER && total_pad % 2 == 1) {
-            int temp  = pad_begin;
-            pad_begin = pad_end;
-            pad_end   = temp;
+        switch (auto_pad) {
+        case MT_AUTOPAD_NOTSET:
+            // No padding
+            pad_begin = 0;
+            pad_end   = 0;
+            break;
+
+        case MT_AUTOPAD_SAME_UPPER:
+        case MT_AUTOPAD_SAME_LOWER: {
+            int output_size = (input_size + stride - 1) / stride;
+            int pad_size =
+                (output_size - 1) * stride + kernel_size - input_size;
+            pad_size = (pad_size > 0) ? pad_size : 0;
+
+            if (auto_pad == MT_AUTOPAD_SAME_UPPER) {
+                pad_begin = pad_size / 2;
+                pad_end   = pad_size - pad_begin;
+            } else { // SAME_LOWER
+                pad_end   = pad_size / 2;
+                pad_begin = pad_size - pad_end;
+            }
+        } break;
+
+        case MT_AUTOPAD_VALID:
+            // No padding
+            pad_begin = 0;
+            pad_end   = 0;
+            break;
+
+        default:
+            // Handle unexpected auto_pad mode
+            fprintf(stderr, "Error: Unknown auto_pad mode\n");
+            return;
         }
 
         output_paddings[i]                    = pad_begin;
@@ -2365,18 +2369,19 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
     case MT_LAYER_CONV_2D: {
         mt_tensor *input = model->tensors[l->inputs[0]];
         mt_tensor *w     = model->tensors[l->data.conv_2d.w_id];
+        mt_tensor *b     = model->tensors[l->data.conv_2d.b_id];
 
-        int kernel_shape[] = {w->shape[1], w->shape[2]};
+        int kernel_shape[] = {w->shape[2], w->shape[3]};
         int strides[]      = {l->data.conv_2d.stride, l->data.conv_2d.stride};
+        int input_shape[]  = {input->shape[2], input->shape[3]};
 
         // adjust paddings
-        mt__auto_pad_to_explicit_paddings(l->data.conv_2d.auto_pad,
-                                          input->shape, kernel_shape, strides,
-                                          2, l->data.conv_2d.pads);
+        mt__auto_pad_to_explicit_paddings(l->data.conv_2d.auto_pad, input_shape,
+                                          kernel_shape, strides, 2,
+                                          l->data.conv_2d.pads);
 
-        res = mt_convolve_2d(input, w, model->tensors[l->data.conv_2d.b_id],
-                             l->data.conv_2d.stride, l->data.conv_2d.pads);
-        mt_tensor_debug_info(res);
+        res = mt_convolve_2d(input, w, b, l->data.conv_2d.stride,
+                             l->data.conv_2d.pads);
         model->tensors[l->outputs[0]] = res;
         break;
     }
@@ -2444,6 +2449,13 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         model->tensors[l->outputs[0]] = res;
         break;
     }
+    case MT_LAYER_LEAKY_RELU: {
+        mt_tensor *input = model->tensors[l->inputs[0]];
+        res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
+        mt_leaky_relu_inplace(res, l->data.leaky_relu.alpha);
+        model->tensors[l->outputs[0]] = res;
+        break;
+    }
     case MT_LAYER_LOCAL_RESPONSE_NORM: {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res = mt_local_response_norm(input, l->data.local_response_norm.size,
@@ -2455,19 +2467,29 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
     }
     case MT_LAYER_MAX_POOL_2D: {
         mt_tensor *input = model->tensors[l->inputs[0]];
+
+        // adjust paddings
+        int kernel_shape[] = {l->data.max_pool_2d.size,
+                              l->data.max_pool_2d.size};
+        int strides[]      = {l->data.max_pool_2d.stride,
+                              l->data.max_pool_2d.stride};
+        int input_shape[]  = {input->shape[2], input->shape[3]};
+        mt__auto_pad_to_explicit_paddings(l->data.max_pool_2d.auto_pad,
+                                          input_shape, kernel_shape, strides, 2,
+                                          l->data.max_pool_2d.pads);
+
         res =
             mt_maxpool_2d(input, l->data.max_pool_2d.size,
                           l->data.max_pool_2d.stride, l->data.max_pool_2d.pads);
+
         model->tensors[l->outputs[0]] = res;
-        ERROR("TODO: set autopad");
         break;
     }
     case MT_LAYER_MUL: {
         mt_tensor *a = model->tensors[l->inputs[0]];
         mt_tensor *b = model->tensors[l->inputs[1]];
-        mt_tensor_debug_info(a);
-        mt_tensor_debug_info(b);
-        res                           = mt_mul(a, b);
+        res          = mt_mul(a, b);
+
         model->tensors[l->outputs[0]] = res;
         break;
     }

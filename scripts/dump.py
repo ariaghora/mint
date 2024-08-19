@@ -187,12 +187,12 @@ def write_instance_normalization(
     eps = node["attributes"].get("epsilon", 1e-05)
     np.array(eps, dtype=np.float32).tofile(f)
 
-    scale_idx = node["inputs"][1]
-    scale = tensors[scale_idx]
-    b_idx = node["inputs"][2]
-    b = tensors[b_idx]
-    write_ndarray(f, scale)
-    write_ndarray(f, b)
+    # scale_idx = node["inputs"][1]
+    # scale = tensors[scale_idx]
+    # b_idx = node["inputs"][2]
+    # b = tensors[b_idx]
+    # write_ndarray(f, scale)
+    # write_ndarray(f, b)
     print(f"wrote InstanceNormalization {id}")
 
 
@@ -261,8 +261,6 @@ def write_constant(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
     write_layer_header(f, LayerKind.CONSTANT.value, node)
-    value = node["attributes"]["value"]
-    write_ndarray(f, value)
     print(f"wrote Constant {id}")
 
 
@@ -349,15 +347,6 @@ def write_conv(
     np.array(auto_pad_id, dtype=np.int32).tofile(f)
     np.array(pads, dtype=np.int32).tofile(f)
 
-    # write w
-    w_idx = node["inputs"][1]
-    w = tensors[w_idx]
-    write_ndarray(f, w)
-
-    # write b
-    b_idx = node["inputs"][2]
-    b = tensors[b_idx]
-    write_ndarray(f, b)
     print(f"wrote Conv {id}")
 
 
@@ -372,15 +361,9 @@ def write_dense(
 
     # write w
     w_idx = node["inputs"][1]
-    w = tensors[w_idx]
     if trans_b:
-        w = w.T
-    write_ndarray(f, w)
+        tensors[w_idx] = tensors[w_idx].T
 
-    # write b
-    b_idx = node["inputs"][2]
-    b = tensors[b_idx]
-    write_ndarray(f, b)
     print(f"wrote Gemm {id}")
 
 
@@ -403,9 +386,7 @@ def write_pad(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
     write_layer_header(f, LayerKind.PAD.value, node)
-    pads_idx = node["inputs"][1]
-    pads = tensors[pads_idx]
-    write_ndarray(f, pads)
+
     # mode = node["attributes"]["mode"].lower()
     # match mode:
     #     case "reflect":
@@ -425,10 +406,6 @@ def write_reshape(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
     write_layer_header(f, LayerKind.RESHAPE.value, node)
-
-    shape_idx = node["inputs"][1]
-    shape = tensors[shape_idx]
-    write_ndarray(f, shape)
     print(f"wrote Reshape {id}")
 
 
@@ -500,16 +477,6 @@ if __name__ == "__main__":
     with open(model_path_out, "wb") as f:
         # Write model headers
         np.array(len(model["nodes"]), dtype=np.int32).tofile(f)
-        np.array(len(model["tensors"]), dtype=np.int32).tofile(f)
-
-        # # write initializers
-        # initializer_len = len(model["tensors"])
-        # np.array(initializer_len, dtype=np.int32).tofile(f)
-        # for t in model["tensors"]:
-        #     if t is None:
-        #         np.array(np.zeros((1,)), dtype=np.float32).tofile(f)
-        #     else:
-        #         np.array(t, dtype=np.int32).tofile(f)
 
         # Write node data
         for id, node in enumerate(model["nodes"]):
@@ -571,7 +538,20 @@ if __name__ == "__main__":
                     if not node["op_type"] in err:
                         err.append(node["op_type"])
 
+        # write initializers (data, id)
+        non_null_tensors = [(i, t) for i, t in enumerate(model["tensors"]) if t is not None]
+        initializer_len = len(non_null_tensors)
+        np.array(initializer_len, dtype=np.int32).tofile(f)
+        for i, t in non_null_tensors:
+            if t is None:
+                continue
+            else:
+                print(t.shape)
+                write_ndarray(f, t)
+                np.array(i, dtype=np.int32).tofile(f)
+
         # write input and output lens, and (name, id) info
+        print("Writing initializers...")
         input_len = len(model["inputs"])
         np.array(input_len, dtype=np.int32).tofile(f)
         for name, id in model["inputs"]:
@@ -580,6 +560,7 @@ if __name__ == "__main__":
             ).tofile(f)
             np.array(id, dtype=np.int32).tofile(f)
 
+        print("Writing input and output info...")
         output_len = len(model["outputs"])
         np.array(output_len, dtype=np.int32).tofile(f)
         for name, id in model["outputs"]:
@@ -594,3 +575,5 @@ if __name__ == "__main__":
         if not to_keep:
             os.remove(model_path_out)
             print("removed")
+
+    print("Done")
