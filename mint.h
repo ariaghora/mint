@@ -1,5 +1,4 @@
 /*
- * ad ima
 
                                 M I N T
 
