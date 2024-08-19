@@ -4,6 +4,7 @@ from enum import Enum
 from io import BufferedWriter
 from typing import Any, Dict, List
 
+import math
 import numpy as np
 import onnx
 import torch
@@ -220,12 +221,23 @@ def write_max_pool(
     write_layer_header(f, LayerKind.MAX_POOL_2D.value, node)
     shape = node["attributes"]["kernel_shape"]
     strides = node["attributes"]["strides"]
-    pads = node["attributes"]["pads"]
+
+    pads = node["attributes"].get("pads", [0]*4)
+    auto_pad = node["attributes"].get("auto_pad", "NOTSET")
+
+    auto_pad_id = 0
+    match auto_pad:
+        case "NOTSET": auto_pad_id = 0
+        case "VALID": auto_pad_id = 1
+        case "SAME_UPPER": auto_pad_id = 2
+        case "SAME_LOWER": auto_pad_id = 3
+
     assert all(v == shape[0] for v in shape)
     assert all(v == strides[0] for v in strides)
 
     np.array(shape[0], dtype=np.int32).tofile(f)
     np.array(strides[0], dtype=np.int32).tofile(f)
+    np.array(auto_pad_id, dtype=np.int32).tofile(f)
     np.array(pads, dtype=np.int32).tofile(f)
     print(f"wrote MaxPool {id}")
 
@@ -265,6 +277,7 @@ def write_mul(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
     write_layer_header(f, LayerKind.MUL.value, node)
+    print(tensors[node["inputs"][1]])
     print(f"wrote Mul {id}")
 
 
@@ -319,9 +332,21 @@ def write_conv(
 
     # NOTE: we refuse mutliple different stride values for now
     strides = node["attributes"]["strides"]
-    pads = node["attributes"]["pads"]
+
+    pads = node["attributes"].get("pads", [0]*4)
+    auto_pad = node["attributes"].get("auto_pad", "NOTSET")
+
+    auto_pad_id = 0
+    match auto_pad:
+        case "NOTSET": auto_pad_id = 0
+        case "VALID": auto_pad_id = 1
+        case "SAME_UPPER": auto_pad_id = 2
+        case "SAME_LOWER": auto_pad_id = 3
+
+
     assert all(v == strides[0] for v in strides)
     np.array(strides[0], dtype=np.int32).tofile(f)
+    np.array(auto_pad_id, dtype=np.int32).tofile(f)
     np.array(pads, dtype=np.int32).tofile(f)
 
     # write w
@@ -476,6 +501,15 @@ if __name__ == "__main__":
         # Write model headers
         np.array(len(model["nodes"]), dtype=np.int32).tofile(f)
         np.array(len(model["tensors"]), dtype=np.int32).tofile(f)
+
+        # # write initializers
+        # initializer_len = len(model["tensors"])
+        # np.array(initializer_len, dtype=np.int32).tofile(f)
+        # for t in model["tensors"]:
+        #     if t is None:
+        #         np.array(np.zeros((1,)), dtype=np.float32).tofile(f)
+        #     else:
+        #         np.array(t, dtype=np.int32).tofile(f)
 
         # Write node data
         for id, node in enumerate(model["nodes"]):
