@@ -368,6 +368,11 @@ void mt_layer_debug_info(mt_layer *l);
 #define MATMUL_BLOCK_SIZE 64
 #define UNROLL_FACTOR     16
 
+#ifndef MT_MALLOC
+#define MT_MALLOC(sz) malloc(sz)
+#define MT_FREE(sz)   free(sz)
+#endif
+
 typedef struct mt_tensor {
     mt_float *data;
 
@@ -1195,9 +1200,9 @@ mt_tensor *mt_image_resize(mt_tensor *img, int target_height,
     float width_scale  = (float)src_width / target_width;
 
     // Pre-compute source y coordinates and their weights
-    float *src_y  = (float *)malloc(target_height * sizeof(float));
-    int   *src_y0 = (int *)malloc(target_height * sizeof(int));
-    float *dy     = (float *)malloc(target_height * sizeof(float));
+    float *src_y  = (float *)MT_MALLOC(target_height * sizeof(float));
+    int   *src_y0 = (int *)MT_MALLOC(target_height * sizeof(int));
+    float *dy     = (float *)MT_MALLOC(target_height * sizeof(float));
 
     for (int y = 0; y < target_height; y++) {
         src_y[y]  = y * height_scale;
@@ -1206,9 +1211,9 @@ mt_tensor *mt_image_resize(mt_tensor *img, int target_height,
     }
 
     // Pre-compute source x coordinates and their weights
-    float *src_x  = (float *)malloc(target_width * sizeof(float));
-    int   *src_x0 = (int *)malloc(target_width * sizeof(int));
-    float *dx     = (float *)malloc(target_width * sizeof(float));
+    float *src_x  = (float *)MT_MALLOC(target_width * sizeof(float));
+    int   *src_x0 = (int *)MT_MALLOC(target_width * sizeof(int));
+    float *dx     = (float *)MT_MALLOC(target_width * sizeof(float));
 
     for (int x = 0; x < target_width; x++) {
         src_x[x]  = x * width_scale;
@@ -1246,12 +1251,12 @@ mt_tensor *mt_image_resize(mt_tensor *img, int target_height,
         }
     }
 
-    free(src_y);
-    free(src_y0);
-    free(dy);
-    free(src_x);
-    free(src_x0);
-    free(dx);
+    MT_FREE(src_y);
+    MT_FREE(src_y0);
+    MT_FREE(dy);
+    MT_FREE(src_x);
+    MT_FREE(src_x0);
+    MT_FREE(dx);
 
     return resized;
 }
@@ -1423,8 +1428,8 @@ static void mt__neon_sgemm(int m, int n, int k, float alpha, const float *A,
         }
     }
 }
+#endif
 
-#else
 // Generic SGEMM implementation
 static void mt__generic_sgemm(int m, int n, int k, float alpha, const float *A,
                               int lda, const float *B, int ldb, float beta,
@@ -1458,7 +1463,6 @@ static void mt__generic_sgemm(int m, int n, int k, float alpha, const float *A,
         }
     }
 }
-#endif
 
 // Unified SGEMM interface
 void mt__sgemm(int m, int n, int k, float alpha, const float *A, int lda,
@@ -2043,7 +2047,7 @@ mt_tensor *mt_tensor_alloc(int *shape, int ndim) {
     MT_ASSERT_F(ndim <= MAX_TENSOR_NDIM, "ndim cannot exceed %d, found %d",
                 MAX_TENSOR_NDIM, ndim);
 
-    mt_tensor *t = (mt_tensor *)calloc(1, sizeof(*t));
+    mt_tensor *t = (mt_tensor *)MT_MALLOC(1 * sizeof(*t));
     t->ndim      = ndim;
     memcpy(t->shape, shape, ndim * sizeof(*shape));
 
@@ -2196,7 +2200,7 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
                                  int input_in_batch) {
 
     mt_reader mp    = (mt_reader){model_bytes, 0, len};
-    mt_model *model = (mt_model *)malloc(sizeof(*model));
+    mt_model *model = (mt_model *)MT_MALLOC(sizeof(*model));
     for (int i = 0; i < MAX_MODEL_INITIALIZER_COUNT; ++i)
         model->tensors[i] = NULL;
 
@@ -2206,7 +2210,7 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
 
     // Read layers and tensors
     for (int i = 0; i < model->layer_count; ++i) {
-        mt_layer *layer = (mt_layer *)malloc(sizeof(*layer));
+        mt_layer *layer = (mt_layer *)MT_MALLOC(sizeof(*layer));
 
         // Read layer header
         mt_reader_read(&layer->kind, sizeof(int), 1, &mp);
@@ -2319,7 +2323,7 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
     mt_reader_read(&model->tensor_count, sizeof(int), 1, &mp);
     DEBUG_LOG_F("model has %d tensor(s)", model->tensor_count);
     for (int i = 0; i < model->tensor_count; ++i) {
-        int       *tensor_id_ptr = (int *)malloc(sizeof(*tensor_id_ptr));
+        int       *tensor_id_ptr = (int *)MT_MALLOC(sizeof(*tensor_id_ptr));
         mt_tensor *t             = mt_tensor_memread(&mp);
         mt_reader_read(tensor_id_ptr, sizeof(int), 1, &mp);
         model->tensors[*tensor_id_ptr] = t;
@@ -2355,7 +2359,7 @@ mt_model *mt_model_load(const char *filename, int input_in_batch) {
     rewind(fp);
 
     // mt_model *model  = (mt_model *)malloc(sizeof(*model));
-    unsigned char *buffer = (unsigned char *)malloc(filelen * sizeof(char));
+    unsigned char *buffer = (unsigned char *)MT_MALLOC(filelen * sizeof(char));
     // Read in the entire model file in a buffer
     fread(buffer, filelen, 1, fp);
     mt_model *model = mt_model_load_from_mem(buffer, filelen, input_in_batch);
