@@ -837,7 +837,6 @@ mt_tensor      *mt_add(mt_tensor *a, mt_tensor *b) {
 }
 
 mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b) {
-    MT_ASSERT_F(b->ndim == 1, "`b` must be of dimension 2, found %d", b->ndim);
     MT_ASSERT_F(w->shape[1] == b->shape[0],
                 "Width of `w` (%d) must match length of `b` (%d)", w->shape[1],
                 b->shape[0]);
@@ -848,6 +847,7 @@ mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b) {
     int batch_size  = res->shape[0];
     int output_size = res->shape[1];
 
+#pragma omp parallel for collapse(2)
     for (int i = 0; i < batch_size; i++) {
         for (int j = 0; j < output_size; j++) {
             res->data[i * output_size + j] += b->data[j];
@@ -1465,7 +1465,7 @@ void mt__sgemm(int m, int n, int k, float alpha, const float *A, int lda,
                const float *B, int ldb, float beta, float *C, int ldc) {
 #ifdef MT_USE_NEON
     mt__neon_sgemm(m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);
-#elif defined(USE_CBLAS)
+#elif defined(MT_USE_BLAS)
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, m, n, k, alpha, A,
                 lda, B, ldb, beta, C, ldc);
 #else
@@ -1491,39 +1491,6 @@ mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b) {
 
     mt_tensor *c = mt_tensor_alloc(MT_ARR_INT(m, n), 2);
     mt__sgemm(m, n, k, 1.0f, a->data, k, b->data, n, 0.0f, c->data, n);
-
-    // #ifdef MT_USE_BLAS
-    //     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, m, n, k, 1.0f,
-    //                 a->data, k, b->data, n, 0.0f, c->data, n);
-    // #else
-    // #pragma omp parallel for collapse(2)
-    //     // Blocked matrix multiplication
-    //     for (int i0 = 0; i0 < m; i0 += MATMUL_BLOCK_SIZE) {
-    //         for (int j0 = 0; j0 < n; j0 += MATMUL_BLOCK_SIZE) {
-    //             for (int k0 = 0; k0 < k; k0 += MATMUL_BLOCK_SIZE) {
-    //                 int max_i =
-    //                     (i0 + MATMUL_BLOCK_SIZE < m) ? i0 + MATMUL_BLOCK_SIZE
-    //                     : m;
-    //                 int max_j =
-    //                     (j0 + MATMUL_BLOCK_SIZE < n) ? j0 + MATMUL_BLOCK_SIZE
-    //                     : n;
-    //                 int max_k =
-    //                     (k0 + MATMUL_BLOCK_SIZE < k) ? k0 + MATMUL_BLOCK_SIZE
-    //                     : k;
-
-    //                 for (int i = i0; i < max_i; i++) {
-    //                     for (int k = k0; k < max_k; k++) {
-    //                         float a_ik = a->data[i * tda + k];
-    //                         for (int j = j0; j < max_j; j++) {
-    //                             c->data[i * n + j] += a_ik * b->data[k * n +
-    //                             j];
-    //                         }
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //     }
-    // #endif
 
     return c;
 }
