@@ -1279,7 +1279,7 @@ mt_tensor *mt_instance_normalize(mt_tensor *t, mt_tensor *scale, mt_tensor *b,
     mt_tensor *output = mt_tensor_alloc(t->shape, t->ndim);
 
     for (int n = 0; n < N; n++) {
-#pragma omp parallel for collapse(2)
+#pragma omp parallel for
         for (int c = 0; c < C; c++) {
             // Compute mean
             mt_float sum = 0.0f;
