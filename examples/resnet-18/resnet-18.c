@@ -1,15 +1,19 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "../../vendors/stb_image.h"
 
-#define MT_USE_BLAS
-#include <cblas.h>
-
 // Comment line below to enable logging and assertion
 #define NDEBUG
 
 #define MT_USE_IM2COL_CONV
 #define MT_USE_STB_IMAGE
 #define MT_IMPLEMENTATION
+
+/*
+uncomment one of two lines below as needed
+*/
+// #define MT_USE_BLAS
+// #define MT_USE_NEON
+
 #include "../../mint.h"
 
 int main(int argc, char **argv) {

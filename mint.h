@@ -347,6 +347,14 @@ void mt_layer_debug_info(mt_layer *l);
 #include <omp.h>
 #endif
 
+#ifdef MT_USE_NEON
+#include <arm_neon.h>
+#endif
+
+#ifdef MT_USE_BLAS
+#include <cblas.h>
+#endif
+
 #define MAX_LAYER_COUNT             1000
 #define MAX_LAYER_INPUT_COUNT       10
 #define MAX_LAYER_OUTPUT_COUNT      10
@@ -358,6 +366,7 @@ void mt_layer_debug_info(mt_layer *l);
 #define MAX_INPUT_OUTPUT_NAME_LEN   50
 
 #define MATMUL_BLOCK_SIZE 64
+#define UNROLL_FACTOR     16
 
 typedef struct mt_tensor {
     mt_float *data;
@@ -1358,6 +1367,112 @@ mt_tensor *mt_local_response_norm(mt_tensor *t, int size, mt_float alpha,
     return output;
 }
 
+#ifdef MT_USE_NEON
+static void mt__neon_sgemm(int m, int n, int k, float alpha, const float *A,
+                           int lda, const float *B, int ldb, float beta,
+                           float *C, int ldc) {
+#pragma omp parallel for collapse(2)
+    for (int i = 0; i < m; i += 4) {
+        for (int j = 0; j < n; j += 4) {
+            float32x4_t c00 = vdupq_n_f32(0);
+            float32x4_t c10 = vdupq_n_f32(0);
+            float32x4_t c20 = vdupq_n_f32(0);
+            float32x4_t c30 = vdupq_n_f32(0);
+
+            for (int l = 0; l < k; l++) {
+                float32x4_t b0 = vld1q_f32(&B[l * ldb + j]);
+
+                float32x4_t a0 = vdupq_n_f32(A[i * lda + l]);
+                float32x4_t a1 = vdupq_n_f32(A[(i + 1) * lda + l]);
+                float32x4_t a2 = vdupq_n_f32(A[(i + 2) * lda + l]);
+                float32x4_t a3 = vdupq_n_f32(A[(i + 3) * lda + l]);
+
+                c00 = vmlaq_f32(c00, a0, b0);
+                c10 = vmlaq_f32(c10, a1, b0);
+                c20 = vmlaq_f32(c20, a2, b0);
+                c30 = vmlaq_f32(c30, a3, b0);
+            }
+
+            c00 = vmulq_n_f32(c00, alpha);
+            c10 = vmulq_n_f32(c10, alpha);
+            c20 = vmulq_n_f32(c20, alpha);
+            c30 = vmulq_n_f32(c30, alpha);
+
+            int rem_m = (m - i) < 4 ? (m - i) : 4;
+            int rem_n = (n - j) < 4 ? (n - j) : 4;
+
+            float32x4_t result[4] = {c00, c10, c20, c30};
+            for (int ii = 0; ii < rem_m; ii++) {
+                float32x4_t c    = vld1q_f32(&C[(i + ii) * ldc + j]);
+                float32x4_t temp = result[ii];
+
+                if (beta != 0.0f) {
+                    temp = vmlaq_n_f32(temp, c, beta);
+                }
+
+                if (rem_n == 4) {
+                    vst1q_f32(&C[(i + ii) * ldc + j], temp);
+                } else {
+                    float temp_arr[4];
+                    vst1q_f32(temp_arr, temp);
+                    for (int jj = 0; jj < rem_n; jj++) {
+                        C[(i + ii) * ldc + j + jj] = temp_arr[jj];
+                    }
+                }
+            }
+        }
+    }
+}
+
+#else
+// Generic SGEMM implementation
+static void mt__generic_sgemm(int m, int n, int k, float alpha, const float *A,
+                              int lda, const float *B, int ldb, float beta,
+                              float *C, int ldc) {
+#pragma omp parallel for collapse(2)
+    for (int i = 0; i < m; i += MATMUL_BLOCK_SIZE) {
+        for (int j = 0; j < n; j += MATMUL_BLOCK_SIZE) {
+            for (int l = 0; l < k; l += MATMUL_BLOCK_SIZE) {
+                int i_end =
+                    (i + MATMUL_BLOCK_SIZE < m) ? i + MATMUL_BLOCK_SIZE : m;
+                int j_end =
+                    (j + MATMUL_BLOCK_SIZE < n) ? j + MATMUL_BLOCK_SIZE : n;
+                int l_end =
+                    (l + MATMUL_BLOCK_SIZE < k) ? l + MATMUL_BLOCK_SIZE : k;
+
+                for (int ii = i; ii < i_end; ii++) {
+                    for (int jj = j; jj < j_end; jj++) {
+                        float sum = 0.0f;
+                        for (int ll = l; ll < l_end; ll++) {
+                            sum += A[ii * lda + ll] * B[ll * ldb + jj];
+                        }
+                        if (l == 0) {
+                            C[ii * ldc + jj] =
+                                alpha * sum + beta * C[ii * ldc + jj];
+                        } else {
+                            C[ii * ldc + jj] += alpha * sum;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+#endif
+
+// Unified SGEMM interface
+void mt__sgemm(int m, int n, int k, float alpha, const float *A, int lda,
+               const float *B, int ldb, float beta, float *C, int ldc) {
+#ifdef MT_USE_NEON
+    mt__neon_sgemm(m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);
+#elif defined(USE_CBLAS)
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, m, n, k, alpha, A,
+                lda, B, ldb, beta, C, ldc);
+#else
+    mt__generic_sgemm(m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);
+#endif
+}
+
 mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b) {
     int m = a->ndim == 1 ? 1 : a->shape[0];
     int n = b->ndim == 1 ? b->shape[0] : b->shape[1];
@@ -1375,35 +1490,40 @@ mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b) {
                 ldb);
 
     mt_tensor *c = mt_tensor_alloc(MT_ARR_INT(m, n), 2);
+    mt__sgemm(m, n, k, 1.0f, a->data, k, b->data, n, 0.0f, c->data, n);
 
-#ifdef MT_USE_BLAS
-    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, m, n, k, 1.0f,
-                a->data, k, b->data, n, 0.0f, c->data, n);
-#else
-#pragma omp parallel for collapse(2)
-    // Blocked matrix multiplication
-    for (int i0 = 0; i0 < m; i0 += MATMUL_BLOCK_SIZE) {
-        for (int j0 = 0; j0 < n; j0 += MATMUL_BLOCK_SIZE) {
-            for (int k0 = 0; k0 < k; k0 += MATMUL_BLOCK_SIZE) {
-                int max_i =
-                    (i0 + MATMUL_BLOCK_SIZE < m) ? i0 + MATMUL_BLOCK_SIZE : m;
-                int max_j =
-                    (j0 + MATMUL_BLOCK_SIZE < n) ? j0 + MATMUL_BLOCK_SIZE : n;
-                int max_k =
-                    (k0 + MATMUL_BLOCK_SIZE < k) ? k0 + MATMUL_BLOCK_SIZE : k;
+    // #ifdef MT_USE_BLAS
+    //     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, m, n, k, 1.0f,
+    //                 a->data, k, b->data, n, 0.0f, c->data, n);
+    // #else
+    // #pragma omp parallel for collapse(2)
+    //     // Blocked matrix multiplication
+    //     for (int i0 = 0; i0 < m; i0 += MATMUL_BLOCK_SIZE) {
+    //         for (int j0 = 0; j0 < n; j0 += MATMUL_BLOCK_SIZE) {
+    //             for (int k0 = 0; k0 < k; k0 += MATMUL_BLOCK_SIZE) {
+    //                 int max_i =
+    //                     (i0 + MATMUL_BLOCK_SIZE < m) ? i0 + MATMUL_BLOCK_SIZE
+    //                     : m;
+    //                 int max_j =
+    //                     (j0 + MATMUL_BLOCK_SIZE < n) ? j0 + MATMUL_BLOCK_SIZE
+    //                     : n;
+    //                 int max_k =
+    //                     (k0 + MATMUL_BLOCK_SIZE < k) ? k0 + MATMUL_BLOCK_SIZE
+    //                     : k;
 
-                for (int i = i0; i < max_i; i++) {
-                    for (int k = k0; k < max_k; k++) {
-                        float a_ik = a->data[i * tda + k];
-                        for (int j = j0; j < max_j; j++) {
-                            c->data[i * n + j] += a_ik * b->data[k * n + j];
-                        }
-                    }
-                }
-            }
-        }
-    }
-#endif
+    //                 for (int i = i0; i < max_i; i++) {
+    //                     for (int k = k0; k < max_k; k++) {
+    //                         float a_ik = a->data[i * tda + k];
+    //                         for (int j = j0; j < max_j; j++) {
+    //                             c->data[i * n + j] += a_ik * b->data[k * n +
+    //                             j];
+    //                         }
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //     }
+    // #endif
 
     return c;
 }

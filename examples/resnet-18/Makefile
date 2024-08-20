@@ -1,6 +1,5 @@
 CC ?= gcc
 CFLAGS = -Wall -Wextra -g -O3 -pedantic
-LDFLAGS = -lblas
 
 TARGET = resnet-18
 SRC = $(TARGET).c
