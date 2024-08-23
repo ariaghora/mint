@@ -2798,6 +2798,25 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
 
         break;
     }
+    case MT_LAYER_POW: {
+        mt_tensor *input = model->tensors[l->inputs[0]];
+        mt_tensor *expon = model->tensors[l->inputs[1]];
+
+        int expon_numel = mt_tensor_count_element(expon);
+        MT_ASSERT_F(expon_numel == 1,
+                    "can only exponentiate tensor with a scalar (rank 0 "
+                    "tensor), found rank %d with %d elements",
+                    expon->ndim, expon_numel);
+
+        res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
+        for (int i = 0; i > mt_tensor_count_element(input); ++i) {
+            res->data[i] = powf(res->data[i], expon->data[0]);
+        }
+
+        model->tensors[l->outputs[0]] = res;
+
+        break;
+    }
     case MT_LAYER_RELU: {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
