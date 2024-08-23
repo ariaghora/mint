@@ -36,11 +36,13 @@ LayerKind = Enum(
         "MAX_POOL_2D",
         "MUL",
         "PAD",
+        "POW",
         "RELU",
         "RESHAPE",
         "RESIZE",
         "SIGMOID",
         "SOFTMAX",
+        "SPLIT",
         "SUB",
         "TANH",
         "TRANSPOSE",
@@ -278,7 +280,6 @@ def write_mul(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
     write_layer_header(f, LayerKind.MUL.value, node)
-    print(tensors[node["inputs"][1]])
     print(f"wrote Mul {id}")
 
 
@@ -398,6 +399,12 @@ def write_pad(
     print(f"wrote Pad {id}")
 
 
+def write_pow(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.POW.value, node)
+    print(f"wrote Pow {id}")
+
 def write_relu(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
@@ -445,6 +452,16 @@ def write_softmax(
     write_layer_header(f, LayerKind.SOFTMAX.value, node)
     np.array(node["attributes"].get("axis", -1), dtype=np.int32).tofile(f)
     print(f"wrote Softmax {id}")
+
+
+def write_split(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.SPLIT.value, node)
+    splits = node["attributes"]["split"]
+    np.array(len(splits), dtype=np.int32).tofile(f)
+    np.array(splits, dtype=np.int32).tofile(f)
+    print(f"wrote Split {id}")
 
 
 def write_tanh(
@@ -523,6 +540,8 @@ if __name__ == "__main__":
                     write_max_pool(f, id, node, model["tensors"])
                 case "Pad":
                     write_pad(f, id, node, model["tensors"])
+                case "Pow":
+                    write_pow(f, id, node, model["tensors"])
                 case "Relu":
                     write_relu(f, id, node, model["tensors"])
                 case "Reshape":
@@ -533,6 +552,8 @@ if __name__ == "__main__":
                     write_sigmoid(f, id, node, model["tensors"])
                 case "Softmax":
                     write_softmax(f, id, node, model["tensors"])
+                case "Split":
+                    write_split(f, id, node, model["tensors"])
                 case "Tanh":
                     write_tanh(f, id, node, model["tensors"])
                 case "Transpose":

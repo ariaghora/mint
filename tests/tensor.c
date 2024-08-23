@@ -147,6 +147,43 @@ void test_permute_dim(Stats *stats) {
 
     mt_tensor_free(a);
     mt_tensor_free(res);
+
+    // clang-format off
+    MT_SECTION_TITLE("5D Permutation: (a,b,c,d,e)->(e,d,c,b,a)");
+
+    // Create a 5D tensor with dimensions 2x2x2x2x2
+    a = mt_tensor_alloc_values(
+        MT_ARR_INT(2, 2, 2, 2, 2), 5,
+        MT_ARR_FLOAT(
+                1,  2,  3,  4,  5,  6,  7,  8,
+                9, 10, 11, 12, 13, 14, 15, 16,
+            17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 32
+        )
+    );
+
+    // Perform the permutation
+    res = mt_tensor_permute_dims(a, MT_ARR_INT(4, 3, 2, 1, 0));
+
+    // Check the shape
+    MT_ASSERT_TEST("shape", mt_arr_same(res->shape, MT_ARR_INT(2, 2, 2, 2, 2), 5, SZ_I));
+
+    // Check the data
+    MT_ASSERT_TEST(
+        "data",
+        mt_arr_same(res->data,
+            MT_ARR_FLOAT(
+                    1, 17,  9, 25,  5, 21, 13, 29,
+                    3, 19, 11, 27,  7, 23, 15, 31,
+                    2, 18, 10, 26,  6, 22, 14, 30,
+                    4, 20, 12, 28,  8, 24, 16, 32
+            ),
+            32, SZ_F)
+    );
+
+    mt_tensor_free(a);
+    mt_tensor_free(res);
+    // clang-format on
 }
 
 void test_slice(Stats *stats) {
@@ -365,7 +402,7 @@ void test_tensor_pad(Stats *stats) {
     // clang-format off
     {
         MT_SECTION_TITLE("2D tensor reflect pad");
-        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(3, 3), 2, 
+        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(3, 3), 2,
                                                   MT_ARR_FLOAT(1, 2, 3,
                                                                4, 5, 6,
                                                                7, 8, 9));
@@ -422,7 +459,7 @@ void test_tensor_pad(Stats *stats) {
     // 2D tensor reflect pad
     {
         MT_SECTION_TITLE("2D tensor reflect pad");
-        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(3, 3), 2, 
+        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(3, 3), 2,
                                                   MT_ARR_FLOAT(1, 2, 3,
                                                                4, 5, 6,
                                                                7, 8, 9));
@@ -443,23 +480,23 @@ void test_tensor_pad(Stats *stats) {
     {
         MT_SECTION_TITLE("2D tensor reflect pad with asymmetric padding");
         printf("Test case 1: 2D tensor reflect pad with asymmetric padding\n");
-        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(3, 3), 2, 
+        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(3, 3), 2,
                                                   MT_ARR_FLOAT(1, 2, 3,
                                                                4, 5, 6,
                                                                7, 8, 9));
         int pads[] = {1, 2, 0, 1};
-        
+
         printf("Padding: top=%d, left=%d, bottom=%d, right=%d\n\n", pads[0], pads[1], pads[2], pads[3]);
-        
+
         mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT, 0);
-        
+
         mt_float expected[] = {2, 1, 1, 2, 3, 3,
                                1, 1, 1, 2, 3, 3,
                                4, 4, 4, 5, 6, 6,
                                7, 7, 7, 8, 9, 9};
-        
+
         mt_tensor *expected_tensor = mt_tensor_alloc_values(MT_ARR_INT(4, 6), 2, expected);
-        
+
         mt_tensor_free(input);
         mt_tensor_free(output);
         mt_tensor_free(expected_tensor);
@@ -468,7 +505,7 @@ void test_tensor_pad(Stats *stats) {
     // 3D tensor reflect pad
     {
         MT_SECTION_TITLE("3D tensor reflect pad");
-        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(2, 2, 3), 3, 
+        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(2, 2, 3), 3,
                                                   MT_ARR_FLOAT(1, 2, 3,
                                                                4, 5, 6,
                                                                7, 8, 9,
@@ -492,7 +529,7 @@ void test_tensor_pad(Stats *stats) {
     // 4D tensor reflect pad (NCHW format)
     {
         MT_SECTION_TITLE("4D tensor reflect pad (NCHW format)");
-        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(2, 2, 2, 2), 4, 
+        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(2, 2, 2, 2), 4,
                                                   MT_ARR_FLOAT(1, 2,
                                                                3, 4,
                                                                5, 6,
@@ -540,15 +577,15 @@ void test_tensor_pad(Stats *stats) {
     // Edge case: 2D tensor with large padding
     {
         MT_SECTION_TITLE("2D tensor with large padding");
-        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(2, 2), 2, 
+        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(2, 2), 2,
                                                   MT_ARR_FLOAT(1, 2,
                                                                3, 4));
         int pads[] = {3, 3, 3, 3};
-        
+
         printf("Padding: top=%d, left=%d, bottom=%d, right=%d\n\n", pads[0], pads[1], pads[2], pads[3]);
-        
+
         mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT, 0);
-        
+
         mt_float expected[] = {4, 3, 4, 3, 4, 3, 4, 3,
                                2, 1, 2, 1, 2, 1, 2, 1,
                                4, 3, 4, 3, 4, 3, 4, 3,
@@ -557,9 +594,9 @@ void test_tensor_pad(Stats *stats) {
                                2, 1, 2, 1, 2, 1, 2, 1,
                                4, 3, 4, 3, 4, 3, 4, 3,
                                2, 1, 2, 1, 2, 1, 2, 1};
-        
+
         mt_tensor *expected_tensor = mt_tensor_alloc_values(MT_ARR_INT(8, 8), 2, expected);
-        
+
         mt_tensor_free(input);
         mt_tensor_free(output);
         mt_tensor_free(expected_tensor);

@@ -299,11 +299,13 @@ typedef struct mt_model mt_model;
     T(MT_LAYER_MAX_POOL_2D)                                                    \
     T(MT_LAYER_MUL)                                                            \
     T(MT_LAYER_PAD)                                                            \
+    T(MT_LAYER_POW)                                                            \
     T(MT_LAYER_RELU)                                                           \
     T(MT_LAYER_RESHAPE)                                                        \
     T(MT_LAYER_RESIZE)                                                         \
     T(MT_LAYER_SIGMOID)                                                        \
     T(MT_LAYER_SOFTMAX)                                                        \
+    T(MT_LAYER_SPLIT)                                                          \
     T(MT_LAYER_SUB)                                                            \
     T(MT_LAYER_TANH)                                                           \
     T(MT_LAYER_TRANSPOSE)
@@ -364,6 +366,7 @@ void mt_layer_debug_info(mt_layer *l);
 #define MAX_LAYER_NEXT_COUNT        5
 #define MAX_MODEL_INITIALIZER_COUNT 1500
 #define MAX_TENSOR_NDIM             5
+#define MAX_TENSOR_SPLITS           5
 #define MAX_INPUT_OUTPUT_COUNT      5
 #define MAX_INPUT_OUTPUT_NAME_LEN   50
 
@@ -462,6 +465,12 @@ typedef struct mt_layer {
         struct {
             int axis;
         } softmax;
+
+        // MT_LAYER_SPLIT
+        struct {
+            int n_split;
+            int splits[MAX_TENSOR_SPLITS];
+        } split;
 
         // MT_LAYER_TRANSPOSE
         struct {
@@ -1801,8 +1810,6 @@ mt_tensor *mt__permute(mt_tensor *input, const int *dims, int ndim) {
 
 // Specialized function for 2D permute
 mt_tensor *mt__permute_2d(mt_tensor *input, const int *dims) {
-    MT_ASSERT(input->ndim == 2, "Input tensor must be 2-dimensional");
-
     int        new_shape[2] = {input->shape[dims[0]], input->shape[dims[1]]};
     mt_tensor *output       = mt_tensor_alloc(new_shape, 2);
 
@@ -1824,8 +1831,6 @@ mt_tensor *mt__permute_2d(mt_tensor *input, const int *dims) {
 
 // Specialized function for 3D permute
 mt_tensor *mt__permute_3d(mt_tensor *input, const int *dims) {
-    MT_ASSERT(input->ndim == 3, "Input tensor must be 3-dimensional");
-
     int        new_shape[3] = {input->shape[dims[0]], input->shape[dims[1]],
                                input->shape[dims[2]]};
     mt_tensor *output       = mt_tensor_alloc(new_shape, 3);
@@ -1850,8 +1855,6 @@ mt_tensor *mt__permute_3d(mt_tensor *input, const int *dims) {
 
 // Specialized function for 4D permute
 mt_tensor *mt__permute_4d(mt_tensor *input, const int *dims) {
-    MT_ASSERT(input->ndim == 4, "Input tensor must be 4-dimensional");
-
     int        new_shape[4] = {input->shape[dims[0]], input->shape[dims[1]],
                                input->shape[dims[2]], input->shape[dims[3]]};
     mt_tensor *output       = mt_tensor_alloc(new_shape, 4);
@@ -1891,6 +1894,63 @@ mt_tensor *mt__permute_4d(mt_tensor *input, const int *dims) {
     return output;
 }
 
+mt_tensor *mt__permute_5d(mt_tensor *input, const int *dims) {
+    int        new_shape[5] = {input->shape[dims[0]], input->shape[dims[1]],
+                               input->shape[dims[2]], input->shape[dims[3]],
+                               input->shape[dims[4]]};
+    mt_tensor *output       = mt_tensor_alloc(new_shape, 5);
+    int        b = input->shape[1], c = input->shape[2], d = input->shape[3],
+        e     = input->shape[4];
+    int new_a = new_shape[0], new_b = new_shape[1], new_c = new_shape[2],
+        new_d = new_shape[3], new_e = new_shape[4];
+
+    for (int i = 0; i < new_a; i++) {
+        for (int j = 0; j < new_b; j++) {
+            for (int k = 0; k < new_c; k++) {
+                for (int l = 0; l < new_d; l++) {
+                    for (int m = 0; m < new_e; m++) {
+                        int old_i = dims[0] == 0   ? i
+                                    : dims[1] == 0 ? j
+                                    : dims[2] == 0 ? k
+                                    : dims[3] == 0 ? l
+                                                   : m;
+                        int old_j = dims[0] == 1   ? i
+                                    : dims[1] == 1 ? j
+                                    : dims[2] == 1 ? k
+                                    : dims[3] == 1 ? l
+                                                   : m;
+                        int old_k = dims[0] == 2   ? i
+                                    : dims[1] == 2 ? j
+                                    : dims[2] == 2 ? k
+                                    : dims[3] == 2 ? l
+                                                   : m;
+                        int old_l = dims[0] == 3   ? i
+                                    : dims[1] == 3 ? j
+                                    : dims[2] == 3 ? k
+                                    : dims[3] == 3 ? l
+                                                   : m;
+                        int old_m = dims[0] == 4   ? i
+                                    : dims[1] == 4 ? j
+                                    : dims[2] == 4 ? k
+                                    : dims[3] == 4 ? l
+                                                   : m;
+
+                        output
+                            ->data[(((i * new_b + j) * new_c + k) * new_d + l) *
+                                       new_e +
+                                   m] =
+                            input->data[(((old_i * b + old_j) * c + old_k) * d +
+                                         old_l) *
+                                            e +
+                                        old_m];
+                    }
+                }
+            }
+        }
+    }
+    return output;
+}
+
 // Main permute function that selects the appropriate implementation
 mt_tensor *mt_tensor_permute_dims(mt_tensor *t, int *dims) {
     switch (t->ndim) {
@@ -1900,6 +1960,8 @@ mt_tensor *mt_tensor_permute_dims(mt_tensor *t, int *dims) {
         return mt__permute_3d(t, dims);
     case 4:
         return mt__permute_4d(t, dims);
+    case 5:
+        return mt__permute_5d(t, dims);
     default:
         return mt__permute(t, dims, t->ndim);
     }
@@ -2285,6 +2347,8 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len) {
                            &mp);
         } else if (layer->kind == MT_LAYER_PAD) {
             // nothing to read
+        } else if (layer->kind == MT_LAYER_POW) {
+            // nothing to read
         } else if (layer->kind == MT_LAYER_RELU) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_RESHAPE) {
@@ -2295,6 +2359,10 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_SOFTMAX) {
             mt_reader_read(&layer->data.softmax.axis, sizeof(int), 1, &mp);
+        } else if (layer->kind == MT_LAYER_SPLIT) {
+            mt_reader_read(&layer->data.split.n_split, sizeof(int), 1, &mp);
+            mt_reader_read(&layer->data.split.splits, sizeof(int),
+                           layer->data.split.n_split, &mp);
         } else if (layer->kind == MT_LAYER_TANH) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_TRANSPOSE) {
@@ -2304,7 +2372,7 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len) {
                         "input ndim (%d) exceeds maximum allowed tensor "
                         "dimension (%d)",
                         ndim, MAX_TENSOR_NDIM);
-            mt_reader_read(&layer->data.transpose, sizeof(int), ndim, &mp);
+            mt_reader_read(&layer->data.transpose.perm, sizeof(int), ndim, &mp);
         } else {
             if (layer->kind == MT_LAYER_UNKNOWN) {
                 printf("unknown layer detected, possibly because its "
@@ -2686,9 +2754,10 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
 
         mt_tensor *roi = model->tensors[l->inputs[1]];
         if (roi != NULL)
-            MT_ASSERT(roi->data[4] == 1 && roi->data[5] == 1 && roi->data[6] &&
-                          roi->data[7] == 1,
-                      "cannot handle non 1 roi yet");
+            if (roi->ndim == 8)
+                MT_ASSERT(roi->data[4] == 1 && roi->data[5] == 1 &&
+                              roi->data[6] && roi->data[7] == 1,
+                          "cannot handle non 1 roi yet");
 
         mt_tensor *scales = model->tensors[l->inputs[2]];
         if (scales != NULL)
@@ -2749,6 +2818,12 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
         WARN_LOG("softmax is not implemented yet, so it is an identity "
                  "function now");
+        model->tensors[l->outputs[0]] = res;
+        break;
+    }
+    case MT_LAYER_TRANSPOSE: {
+        mt_tensor *input = model->tensors[l->inputs[0]];
+        res = mt_tensor_permute_dims(input, l->data.transpose.perm);
         model->tensors[l->outputs[0]] = res;
         break;
     }
