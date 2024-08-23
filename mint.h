@@ -123,7 +123,7 @@ is specified as follows:
 
 
   MT_USE_STB_IMAGE
-  --------------------------------------------------------------------------
+  -------------------------------------------------------------------------
   Whether or not to use image loading functionality supported by stb_image.h
 for example, mt_tensor_load_image. If you enable this, then you must include
 `stb_image.h` BEFORE incuding `mint.h`. For example:
@@ -260,9 +260,8 @@ void       mt_tensor_debug_info(mt_tensor *t);
 // Free tensor
 void       mt_tensor_free(mt_tensor *t);
 // Load image as a tensor with shape of CxHxW. C is the number of channel, H
-// is the image height, and W is the image width.
-mt_tensor *mt_tensor_load_image(char *filename);
-// Pad along tensor's dimension
+// is the image height, and W is the image widthmt_tensor
+// *mt_tensor_load_image(char *filename); Pad along tensor's dimension
 mt_tensor *mt_tensor_pad(mt_tensor *t, int *pads, mt_pad_mode mode,
                          mt_float constant_val);
 // Swap tensor's dimensions
@@ -2333,7 +2332,6 @@ mt_tensor *mt_tensor_memread(mt_reader *mp) {
 }
 
 mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len) {
-
     mt_reader mp    = (mt_reader){model_bytes, 0, len};
     mt_model *model = (mt_model *)MT_MALLOC(sizeof(*model));
     for (int i = 0; i < MAX_MODEL_INITIALIZER_COUNT; ++i)
@@ -2618,6 +2616,12 @@ void mt__auto_pad_to_explicit_paddings(mt__autopad_mode auto_pad,
     }
 }
 
+void mt__model_set_tensor(mt_model *model, int id, mt_tensor *t) {
+    if (model->tensors[id] != NULL)
+        mt_tensor_free(model->tensors[id]);
+    model->tensors[id] = t;
+}
+
 void mt__layer_forward(mt_layer *l, mt_model *model) {
     mt_tensor *res = NULL;
 
@@ -2626,8 +2630,8 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         mt_tensor *a = model->tensors[l->inputs[0]];
         mt_tensor *b = model->tensors[l->inputs[1]];
 
-        res                           = mt_add(a, b);
-        model->tensors[l->outputs[0]] = res;
+        res = mt_add(a, b);
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_AVG_POOL_2D: {
@@ -2635,7 +2639,7 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         res              = mt_avg_pool_2d(input, l->data.avg_pool_2d.size,
                                           l->data.avg_pool_2d.stride,
                                           l->data.avg_pool_2d.pads);
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_CONCAT: {
@@ -2645,7 +2649,7 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         }
 
         res = mt_concat(inputs, l->input_count, l->data.concat.axis);
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_CONSTANT: {
@@ -2669,7 +2673,7 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
 
         res = mt_convolve_2d(input, w, b, l->data.conv_2d.stride,
                              l->data.conv_2d.pads);
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_DENSE: {
@@ -2677,8 +2681,8 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         mt_tensor *w     = model->tensors[l->inputs[1]];
         mt_tensor *b     = model->tensors[l->inputs[2]];
 
-        res                           = mt_affine(input, w, b);
-        model->tensors[l->outputs[0]] = res;
+        res = mt_affine(input, w, b);
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_DROPOUT: {
@@ -2686,7 +2690,7 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         DEBUG_LOG("drop-out has no effect");
         mt_tensor *res =
             mt_tensor_alloc_values(input->shape, input->ndim, input->data);
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_FLATTEN: {
@@ -2720,13 +2724,13 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         res->shape[start_axis] = trailing_dim_size;
         res->ndim              = out_ndim;
 
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_GLOBAL_AVG_POOL: {
-        mt_tensor *input              = model->tensors[l->inputs[0]];
-        res                           = mt_global_avg_pool_2d(input);
-        model->tensors[l->outputs[0]] = res;
+        mt_tensor *input = model->tensors[l->inputs[0]];
+        res              = mt_global_avg_pool_2d(input);
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_INSTANCE_NORMALIZATION: {
@@ -2735,14 +2739,14 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         mt_tensor *scale = model->tensors[l->inputs[1]];
         mt_tensor *bias  = model->tensors[l->inputs[2]];
         res              = mt_instance_normalize(input, scale, bias, eps);
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_LEAKY_RELU: {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
         mt_leaky_relu_inplace(res, l->data.leaky_relu.alpha);
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_LOCAL_RESPONSE_NORM: {
@@ -2751,7 +2755,7 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
                                      l->data.local_response_norm.alpha,
                                      l->data.local_response_norm.beta,
                                      l->data.local_response_norm.bias);
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_MAX_POOL_2D: {
@@ -2771,7 +2775,7 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
             mt_maxpool_2d(input, l->data.max_pool_2d.size,
                           l->data.max_pool_2d.stride, l->data.max_pool_2d.pads);
 
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_MUL: {
@@ -2779,7 +2783,7 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         mt_tensor *b = model->tensors[l->inputs[1]];
         res          = mt_mul(a, b);
 
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_PAD: {
@@ -2794,7 +2798,7 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         WARN_LOG("currently pad mode is always reflect");
         res = mt_tensor_pad(input, pads_int, MT_PAD_REFLECT, 0.0);
 
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
 
         break;
     }
@@ -2813,7 +2817,7 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
             res->data[i] = powf(res->data[i], expon->data[0]);
         }
 
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
 
         break;
     }
@@ -2821,7 +2825,7 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
         mt_relu_inplace(res);
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_RESHAPE: {
@@ -2837,7 +2841,7 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         res = mt_tensor_alloc_values(input1->shape, input1->ndim, input1->data);
         mt_tensor_reshape_inplace(res, new_shape, new_ndim);
 
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_RESIZE: {
@@ -2902,14 +2906,14 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
             mt_tensor_free(temp_output);
         }
 
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_SIGMOID: {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
         mt_sigmoid_inplace(res);
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_SOFTMAX: {
@@ -2917,7 +2921,7 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
         WARN_LOG("softmax is not implemented yet, so it is an identity "
                  "function now");
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_SPLIT: {
@@ -2927,15 +2931,15 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
                         l->data.split.n_split, splits);
 
         for (int i = 0; i < l->data.split.n_split; i++) {
-            int out_idx             = l->outputs[i];
-            model->tensors[out_idx] = splits[i];
+            int out_idx = l->outputs[i];
+            mt__model_set_tensor(model, out_idx, splits[i]);
         }
         break;
     }
     case MT_LAYER_TRANSPOSE: {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res = mt_tensor_permute_dims(input, l->data.transpose.perm);
-        model->tensors[l->outputs[0]] = res;
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     default:
