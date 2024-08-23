@@ -26,6 +26,8 @@
 #define MT_ASSERT_TEST(test_name, condition)                                   \
     MT_ASSERT_TEST_F(test_name, condition, "%s", "")
 
+// clang-format off
+
 typedef struct {
     int failed;
     int pass;
@@ -399,24 +401,19 @@ void test_concat(Stats *stats) {
     mt_tensor_free(res);
 }
 void test_tensor_pad(Stats *stats) {
-    // clang-format off
     {
         MT_SECTION_TITLE("2D tensor reflect pad");
-        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(3, 3), 2,
-                                                  MT_ARR_FLOAT(1, 2, 3,
-                                                               4, 5, 6,
-                                                               7, 8, 9));
-        int pads[] = {1, 1, 1, 1};
+        mt_tensor *input = mt_tensor_alloc_values(
+            MT_ARR_INT(3, 3), 2, MT_ARR_FLOAT(1, 2, 3, 4, 5, 6, 7, 8, 9));
+        int        pads[] = {1, 1, 1, 1};
         mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT, 0);
         // Verify shape
-        MT_ASSERT_TEST("shape", mt_arr_same(output->shape, MT_ARR_INT(5, 5), 2, SZ_I));
+        MT_ASSERT_TEST("shape",
+                       mt_arr_same(output->shape, MT_ARR_INT(5, 5), 2, SZ_I));
 
         // Verify data
-        mt_float expected[] = {5, 4, 5, 6, 5,
-                               2, 1, 2, 3, 2,
-                               5, 4, 5, 6, 5,
-                               8, 7, 8, 9, 8,
-                               5, 4, 5, 6, 5};
+        mt_float expected[] = {5, 4, 5, 6, 5, 2, 1, 2, 3, 2, 5, 4, 5,
+                               6, 5, 8, 7, 8, 9, 8, 5, 4, 5, 6, 5};
         MT_ASSERT_TEST("data", mt_arr_same(output->data, expected, 25, SZ_F));
 
         mt_tensor_free(input);
@@ -424,22 +421,32 @@ void test_tensor_pad(Stats *stats) {
     }
 
     MT_SECTION_TITLE("1D tensor reflect pad");
-    mt_tensor *a = mt_tensor_alloc_values(MT_ARR_INT(5), 1, MT_ARR_FLOAT(1, 2, 3, 4, 5));
-    int pads_1d[] = {2, 2};
-    mt_tensor *res_1d = mt_tensor_pad(a, pads_1d, MT_PAD_REFLECT, 0);
-    MT_ASSERT_TEST("1D shape", mt_arr_same(res_1d->shape, MT_ARR_INT(9), 1, SZ_I));
-    MT_ASSERT_TEST("1D data", mt_arr_same(res_1d->data, MT_ARR_FLOAT(3, 2, 1, 2, 3, 4, 5, 4, 3), 9, SZ_F));
+    mt_tensor *a =
+        mt_tensor_alloc_values(MT_ARR_INT(5), 1, MT_ARR_FLOAT(1, 2, 3, 4, 5));
+    int        pads_1d[] = {2, 2};
+    mt_tensor *res_1d    = mt_tensor_pad(a, pads_1d, MT_PAD_REFLECT, 0);
+    MT_ASSERT_TEST("1D shape",
+                   mt_arr_same(res_1d->shape, MT_ARR_INT(9), 1, SZ_I));
+    MT_ASSERT_TEST("1D data",
+                   mt_arr_same(res_1d->data,
+                               MT_ARR_FLOAT(3, 2, 1, 2, 3, 4, 5, 4, 3), 9,
+                               SZ_F));
     mt_tensor_free(a);
     mt_tensor_free(res_1d);
 
     // 1D tensor reflect pad
     {
         MT_SECTION_TITLE("1D tensor reflect pad");
-        mt_tensor *a = mt_tensor_alloc_values(MT_ARR_INT(5), 1, MT_ARR_FLOAT(1, 2, 3, 4, 5));
-        int pads_1d[] = {2, 2};
-        mt_tensor *res_1d = mt_tensor_pad(a, pads_1d, MT_PAD_REFLECT, 0);
-        MT_ASSERT_TEST("1D shape", mt_arr_same(res_1d->shape, MT_ARR_INT(9), 1, SZ_I));
-        MT_ASSERT_TEST("1D data", mt_arr_same(res_1d->data, MT_ARR_FLOAT(3, 2, 1, 2, 3, 4, 5, 4, 3), 9, SZ_F));
+        mt_tensor *a         = mt_tensor_alloc_values(MT_ARR_INT(5), 1,
+                                                      MT_ARR_FLOAT(1, 2, 3, 4, 5));
+        int        pads_1d[] = {2, 2};
+        mt_tensor *res_1d    = mt_tensor_pad(a, pads_1d, MT_PAD_REFLECT, 0);
+        MT_ASSERT_TEST("1D shape",
+                       mt_arr_same(res_1d->shape, MT_ARR_INT(9), 1, SZ_I));
+        MT_ASSERT_TEST("1D data",
+                       mt_arr_same(res_1d->data,
+                                   MT_ARR_FLOAT(3, 2, 1, 2, 3, 4, 5, 4, 3), 9,
+                                   SZ_F));
         mt_tensor_free(a);
         mt_tensor_free(res_1d);
     }
@@ -447,11 +454,17 @@ void test_tensor_pad(Stats *stats) {
     // 1D tensor reflect pad with asymmetric padding
     MT_SECTION_TITLE("1D tensor reflect pad with asymmetric padding");
     {
-        mt_tensor *a = mt_tensor_alloc_values(MT_ARR_INT(5), 1, MT_ARR_FLOAT(1, 2, 3, 4, 5));
-        int pads_1d_asym[] = {1, 3};
-        mt_tensor *res_1d_asym = mt_tensor_pad(a, pads_1d_asym, MT_PAD_REFLECT, 0);
-        MT_ASSERT_TEST("1D asymmetric shape", mt_arr_same(res_1d_asym->shape, MT_ARR_INT(9), 1, SZ_I));
-        MT_ASSERT_TEST("1D asymmetric data", mt_arr_same(res_1d_asym->data, MT_ARR_FLOAT(2, 1, 2, 3, 4, 5, 4, 3, 2), 9, SZ_F));
+        mt_tensor *a              = mt_tensor_alloc_values(MT_ARR_INT(5), 1,
+                                                           MT_ARR_FLOAT(1, 2, 3, 4, 5));
+        int        pads_1d_asym[] = {1, 3};
+        mt_tensor *res_1d_asym =
+            mt_tensor_pad(a, pads_1d_asym, MT_PAD_REFLECT, 0);
+        MT_ASSERT_TEST("1D asymmetric shape",
+                       mt_arr_same(res_1d_asym->shape, MT_ARR_INT(9), 1, SZ_I));
+        MT_ASSERT_TEST("1D asymmetric data",
+                       mt_arr_same(res_1d_asym->data,
+                                   MT_ARR_FLOAT(2, 1, 2, 3, 4, 5, 4, 3, 2), 9,
+                                   SZ_F));
         mt_tensor_free(a);
         mt_tensor_free(res_1d_asym);
     }
@@ -459,19 +472,16 @@ void test_tensor_pad(Stats *stats) {
     // 2D tensor reflect pad
     {
         MT_SECTION_TITLE("2D tensor reflect pad");
-        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(3, 3), 2,
-                                                  MT_ARR_FLOAT(1, 2, 3,
-                                                               4, 5, 6,
-                                                               7, 8, 9));
-        int pads[] = {1, 1, 1, 1};
+        mt_tensor *input = mt_tensor_alloc_values(
+            MT_ARR_INT(3, 3), 2, MT_ARR_FLOAT(1, 2, 3, 4, 5, 6, 7, 8, 9));
+        int        pads[] = {1, 1, 1, 1};
         mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT, 0);
-        MT_ASSERT_TEST("2D shape", mt_arr_same(output->shape, MT_ARR_INT(5, 5), 2, SZ_I));
-        mt_float expected[] = {5, 4, 5, 6, 5,
-                               2, 1, 2, 3, 2,
-                               5, 4, 5, 6, 5,
-                               8, 7, 8, 9, 8,
-                               5, 4, 5, 6, 5};
-        MT_ASSERT_TEST("2D data", mt_arr_same(output->data, expected, 25, SZ_F));
+        MT_ASSERT_TEST("2D shape",
+                       mt_arr_same(output->shape, MT_ARR_INT(5, 5), 2, SZ_I));
+        mt_float expected[] = {5, 4, 5, 6, 5, 2, 1, 2, 3, 2, 5, 4, 5,
+                               6, 5, 8, 7, 8, 9, 8, 5, 4, 5, 6, 5};
+        MT_ASSERT_TEST("2D data",
+                       mt_arr_same(output->data, expected, 25, SZ_F));
         mt_tensor_free(input);
         mt_tensor_free(output);
     }
@@ -480,22 +490,20 @@ void test_tensor_pad(Stats *stats) {
     {
         MT_SECTION_TITLE("2D tensor reflect pad with asymmetric padding");
         printf("Test case 1: 2D tensor reflect pad with asymmetric padding\n");
-        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(3, 3), 2,
-                                                  MT_ARR_FLOAT(1, 2, 3,
-                                                               4, 5, 6,
-                                                               7, 8, 9));
+        mt_tensor *input = mt_tensor_alloc_values(
+            MT_ARR_INT(3, 3), 2, MT_ARR_FLOAT(1, 2, 3, 4, 5, 6, 7, 8, 9));
         int pads[] = {1, 2, 0, 1};
 
-        printf("Padding: top=%d, left=%d, bottom=%d, right=%d\n\n", pads[0], pads[1], pads[2], pads[3]);
+        printf("Padding: top=%d, left=%d, bottom=%d, right=%d\n\n", pads[0],
+               pads[1], pads[2], pads[3]);
 
         mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT, 0);
 
-        mt_float expected[] = {2, 1, 1, 2, 3, 3,
-                               1, 1, 1, 2, 3, 3,
-                               4, 4, 4, 5, 6, 6,
-                               7, 7, 7, 8, 9, 9};
+        mt_float expected[] = {2, 1, 1, 2, 3, 3, 1, 1, 1, 2, 3, 3,
+                               4, 4, 4, 5, 6, 6, 7, 7, 7, 8, 9, 9};
 
-        mt_tensor *expected_tensor = mt_tensor_alloc_values(MT_ARR_INT(4, 6), 2, expected);
+        mt_tensor *expected_tensor =
+            mt_tensor_alloc_values(MT_ARR_INT(4, 6), 2, expected);
 
         mt_tensor_free(input);
         mt_tensor_free(output);
@@ -505,23 +513,19 @@ void test_tensor_pad(Stats *stats) {
     // 3D tensor reflect pad
     {
         MT_SECTION_TITLE("3D tensor reflect pad");
-        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(2, 2, 3), 3,
-                                                  MT_ARR_FLOAT(1, 2, 3,
-                                                               4, 5, 6,
-                                                               7, 8, 9,
-                                                               10, 11, 12));
-        int pads[] = {0, 1, 1, 0, 1, 1};
+        mt_tensor *input = mt_tensor_alloc_values(
+            MT_ARR_INT(2, 2, 3), 3,
+            MT_ARR_FLOAT(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12));
+        int        pads[] = {0, 1, 1, 0, 1, 1};
         mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT, 0);
-        MT_ASSERT_TEST("3D shape", mt_arr_same(output->shape, MT_ARR_INT(2, 4, 5), 3, SZ_I));
-        mt_float expected[] = {5, 4, 5, 6, 5,
-                               2, 1, 2, 3, 2,
-                               5, 4, 5, 6, 5,
-                               2, 1, 2, 3, 2,
-                               11, 10, 11, 12, 11,
-                               8, 7, 8, 9, 8,
-                               11, 10, 11, 12, 11,
-                               8, 7, 8, 9, 8};
-        MT_ASSERT_TEST("3D data", mt_arr_same(output->data, expected, 40, SZ_F));
+        MT_ASSERT_TEST("3D shape", mt_arr_same(output->shape,
+                                               MT_ARR_INT(2, 4, 5), 3, SZ_I));
+        mt_float expected[] = {5,  4,  5,  6,  5,  2, 1, 2, 3, 2,
+                               5,  4,  5,  6,  5,  2, 1, 2, 3, 2,
+                               11, 10, 11, 12, 11, 8, 7, 8, 9, 8,
+                               11, 10, 11, 12, 11, 8, 7, 8, 9, 8};
+        MT_ASSERT_TEST("3D data",
+                       mt_arr_same(output->data, expected, 40, SZ_F));
         mt_tensor_free(input);
         mt_tensor_free(output);
     }
@@ -529,35 +533,22 @@ void test_tensor_pad(Stats *stats) {
     // 4D tensor reflect pad (NCHW format)
     {
         MT_SECTION_TITLE("4D tensor reflect pad (NCHW format)");
-        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(2, 2, 2, 2), 4,
-                                                  MT_ARR_FLOAT(1, 2,
-                                                               3, 4,
-                                                               5, 6,
-                                                               7, 8,
-                                                               9, 10,
-                                                               11, 12,
-                                                               13, 14,
-                                                               15, 16));
-        int pads[] = {0, 0, 1, 1, 0, 0, 1, 1};
+        mt_tensor *input =
+            mt_tensor_alloc_values(MT_ARR_INT(2, 2, 2, 2), 4,
+                                   MT_ARR_FLOAT(1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+                                                11, 12, 13, 14, 15, 16));
+        int        pads[] = {0, 0, 1, 1, 0, 0, 1, 1};
         mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT, 0);
-        MT_ASSERT_TEST("4D shape", mt_arr_same(output->shape, MT_ARR_INT(2, 2, 4, 4), 4, SZ_I));
-        mt_float expected[] = {4, 3, 4, 3,
-                               2, 1, 2, 1,
-                               4, 3, 4, 3,
-                               2, 1, 2, 1,
-                               8, 7, 8, 7,
-                               6, 5, 6, 5,
-                               8, 7, 8, 7,
-                               6, 5, 6, 5,
-                               12, 11, 12, 11,
-                               10, 9, 10, 9,
-                               12, 11, 12, 11,
-                               10, 9, 10, 9,
-                               16, 15, 16, 15,
-                               14, 13, 14, 13,
-                               16, 15, 16, 15,
-                               14, 13, 14, 13};
-        MT_ASSERT_TEST("4D data", mt_arr_same(output->data, expected, 64, SZ_F));
+        MT_ASSERT_TEST(
+            "4D shape",
+            mt_arr_same(output->shape, MT_ARR_INT(2, 2, 4, 4), 4, SZ_I));
+        mt_float expected[] = {
+            4,  3,  4,  3,  2,  1,  2,  1,  4,  3,  4,  3,  2,  1,  2,  1,
+            8,  7,  8,  7,  6,  5,  6,  5,  8,  7,  8,  7,  6,  5,  6,  5,
+            12, 11, 12, 11, 10, 9,  10, 9,  12, 11, 12, 11, 10, 9,  10, 9,
+            16, 15, 16, 15, 14, 13, 14, 13, 16, 15, 16, 15, 14, 13, 14, 13};
+        MT_ASSERT_TEST("4D data",
+                       mt_arr_same(output->data, expected, 64, SZ_F));
         mt_tensor_free(input);
         mt_tensor_free(output);
     }
@@ -565,11 +556,15 @@ void test_tensor_pad(Stats *stats) {
     // Edge case: 1D tensor with no padding
     MT_SECTION_TITLE("1D tensor with no padding");
     {
-        mt_tensor *a = mt_tensor_alloc_values(MT_ARR_INT(5), 1, MT_ARR_FLOAT(1, 2, 3, 4, 5));
-        int pads_1d[] = {0, 0};
-        mt_tensor *res_1d = mt_tensor_pad(a, pads_1d, MT_PAD_REFLECT, 0);
-        MT_ASSERT_TEST("1D no padding shape", mt_arr_same(res_1d->shape, MT_ARR_INT(5), 1, SZ_I));
-        MT_ASSERT_TEST("1D no padding data", mt_arr_same(res_1d->data, MT_ARR_FLOAT(1, 2, 3, 4, 5), 5, SZ_F));
+        mt_tensor *a         = mt_tensor_alloc_values(MT_ARR_INT(5), 1,
+                                                      MT_ARR_FLOAT(1, 2, 3, 4, 5));
+        int        pads_1d[] = {0, 0};
+        mt_tensor *res_1d    = mt_tensor_pad(a, pads_1d, MT_PAD_REFLECT, 0);
+        MT_ASSERT_TEST("1D no padding shape",
+                       mt_arr_same(res_1d->shape, MT_ARR_INT(5), 1, SZ_I));
+        MT_ASSERT_TEST(
+            "1D no padding data",
+            mt_arr_same(res_1d->data, MT_ARR_FLOAT(1, 2, 3, 4, 5), 5, SZ_F));
         mt_tensor_free(a);
         mt_tensor_free(res_1d);
     }
@@ -577,31 +572,201 @@ void test_tensor_pad(Stats *stats) {
     // Edge case: 2D tensor with large padding
     {
         MT_SECTION_TITLE("2D tensor with large padding");
-        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(2, 2), 2,
-                                                  MT_ARR_FLOAT(1, 2,
-                                                               3, 4));
-        int pads[] = {3, 3, 3, 3};
+        mt_tensor *input  = mt_tensor_alloc_values(MT_ARR_INT(2, 2), 2,
+                                                   MT_ARR_FLOAT(1, 2, 3, 4));
+        int        pads[] = {3, 3, 3, 3};
 
-        printf("Padding: top=%d, left=%d, bottom=%d, right=%d\n\n", pads[0], pads[1], pads[2], pads[3]);
+        printf("Padding: top=%d, left=%d, bottom=%d, right=%d\n\n", pads[0],
+               pads[1], pads[2], pads[3]);
 
         mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT, 0);
 
-        mt_float expected[] = {4, 3, 4, 3, 4, 3, 4, 3,
-                               2, 1, 2, 1, 2, 1, 2, 1,
-                               4, 3, 4, 3, 4, 3, 4, 3,
-                               2, 1, 2, 1, 2, 1, 2, 1,
-                               4, 3, 4, 3, 4, 3, 4, 3,
-                               2, 1, 2, 1, 2, 1, 2, 1,
-                               4, 3, 4, 3, 4, 3, 4, 3,
-                               2, 1, 2, 1, 2, 1, 2, 1};
+        mt_float expected[] = {4, 3, 4, 3, 4, 3, 4, 3, 2, 1, 2, 1, 2, 1, 2, 1,
+                               4, 3, 4, 3, 4, 3, 4, 3, 2, 1, 2, 1, 2, 1, 2, 1,
+                               4, 3, 4, 3, 4, 3, 4, 3, 2, 1, 2, 1, 2, 1, 2, 1,
+                               4, 3, 4, 3, 4, 3, 4, 3, 2, 1, 2, 1, 2, 1, 2, 1};
 
-        mt_tensor *expected_tensor = mt_tensor_alloc_values(MT_ARR_INT(8, 8), 2, expected);
+        mt_tensor *expected_tensor =
+            mt_tensor_alloc_values(MT_ARR_INT(8, 8), 2, expected);
 
         mt_tensor_free(input);
         mt_tensor_free(output);
         mt_tensor_free(expected_tensor);
     }
-    // clang-format on
+}
+
+// Test function
+void test_tensor_split(Stats *stats) {
+    // 1D tensor split test
+    {
+        MT_SECTION_TITLE("1D tensor split");
+        int        shape[] = {6};
+        mt_tensor *t =
+            mt_tensor_alloc_values(shape, 1, (mt_float[]){1, 2, 3, 4, 5, 6});
+        int        splits[] = {2, 4};
+        mt_tensor *result[2];
+        mt_tensor_split(t, 0, splits, 2, result);
+
+        MT_ASSERT_TEST("1D split[0] shape",
+                       mt_arr_same(result[0]->shape, (int[]){2}, 1, SZ_I));
+        MT_ASSERT_TEST(
+            "1D split[0] data",
+            mt_arr_same(result[0]->data, (mt_float[]){1, 2}, 2, SZ_F));
+        MT_ASSERT_TEST("1D split[1] shape",
+                       mt_arr_same(result[1]->shape, (int[]){4}, 1, SZ_I));
+        MT_ASSERT_TEST(
+            "1D split[1] data",
+            mt_arr_same(result[1]->data, (mt_float[]){3, 4, 5, 6}, 4, SZ_F));
+
+        mt_tensor_free(t);
+        mt_tensor_free(result[0]);
+        mt_tensor_free(result[1]);
+    }
+
+    // 2D tensor split test
+    {
+        MT_SECTION_TITLE("2D tensor split");
+        int        shape[] = {3, 4};
+        mt_tensor *t       = mt_tensor_alloc_values(
+            shape, 2, (mt_float[]){1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12});
+        int        splits[] = {1, 2, 1};
+        mt_tensor *result[3];
+        mt_tensor_split(t, 1, splits, 3, result);
+
+        MT_ASSERT_TEST("2D split[0] shape",
+                       mt_arr_same(result[0]->shape, (int[]){3, 1}, 2, SZ_I));
+        MT_ASSERT_TEST(
+            "2D split[0] data",
+            mt_arr_same(result[0]->data, (mt_float[]){1, 5, 9}, 3, SZ_F));
+        MT_ASSERT_TEST("2D split[1] shape",
+                       mt_arr_same(result[1]->shape, (int[]){3, 2}, 2, SZ_I));
+        MT_ASSERT_TEST("2D split[1] data",
+                       mt_arr_same(result[1]->data,
+                                   (mt_float[]){2, 3, 6, 7, 10, 11}, 6, SZ_F));
+        MT_ASSERT_TEST("2D split[2] shape",
+                       mt_arr_same(result[2]->shape, (int[]){3, 1}, 2, SZ_I));
+        MT_ASSERT_TEST(
+            "2D split[2] data",
+            mt_arr_same(result[2]->data, (mt_float[]){4, 8, 12}, 3, SZ_F));
+
+        mt_tensor_free(t);
+        mt_tensor_free(result[0]);
+        mt_tensor_free(result[1]);
+        mt_tensor_free(result[2]);
+    }
+
+    // 3D tensor split test
+    {
+        MT_SECTION_TITLE("3D tensor split");
+        int        shape[] = {2, 3, 4};
+        mt_tensor *t       = mt_tensor_alloc_values(
+            shape, 3,
+            (mt_float[]){1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12,
+
+                               13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24});
+        int        splits[] = {1, 2};
+        mt_tensor *result[2];
+        mt_tensor_split(t, 1, splits, 2, result);
+
+        MT_ASSERT_TEST(
+            "3D split[0] shape",
+            mt_arr_same(result[0]->shape, (int[]){2, 1, 4}, 3, SZ_I));
+        MT_ASSERT_TEST("3D split[0] data",
+                       mt_arr_same(result[0]->data,
+                                   (mt_float[]){1, 2, 3, 4, 13, 14, 15, 16}, 8,
+                                   SZ_F));
+        MT_ASSERT_TEST(
+            "3D split[1] shape",
+            mt_arr_same(result[1]->shape, (int[]){2, 2, 4}, 3, SZ_I));
+        MT_ASSERT_TEST("3D split[1] data",
+                       mt_arr_same(result[1]->data,
+                                   (mt_float[]){5, 6, 7, 8, 9, 10, 11, 12, 17,
+                                                18, 19, 20, 21, 22, 23, 24},
+                                   16, SZ_F));
+
+        mt_tensor_free(t);
+        mt_tensor_free(result[0]);
+        mt_tensor_free(result[1]);
+    }
+
+    // 4D tensor split test
+    {
+        MT_SECTION_TITLE("4D tensor split");
+        int        shape[] = {2, 2, 2, 3};
+        mt_tensor *t       = mt_tensor_alloc_values(
+            shape, 4,
+            (mt_float[]){1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12,
+
+                               13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24});
+        int        splits[] = {1, 2};
+        mt_tensor *result[2];
+        mt_tensor_split(t, 3, splits, 2, result);
+
+        MT_ASSERT_TEST(
+            "4D split[0] shape",
+            mt_arr_same(result[0]->shape, (int[]){2, 2, 2, 1}, 4, SZ_I));
+        MT_ASSERT_TEST("4D split[0] data",
+                       mt_arr_same(result[0]->data,
+                                   (mt_float[]){1, 4, 7, 10, 13, 16, 19, 22}, 8,
+                                   SZ_F));
+        MT_ASSERT_TEST(
+            "4D split[1] shape",
+            mt_arr_same(result[1]->shape, (int[]){2, 2, 2, 2}, 4, SZ_I));
+        MT_ASSERT_TEST("4D split[1] data",
+                       mt_arr_same(result[1]->data,
+                                   (mt_float[]){2, 3, 5, 6, 8, 9, 11, 12, 14,
+                                                15, 17, 18, 20, 21, 23, 24},
+                                   16, SZ_F));
+
+        mt_tensor_free(t);
+        mt_tensor_free(result[0]);
+        mt_tensor_free(result[1]);
+    }
+
+    // 5D tensor split test
+    {
+        MT_SECTION_TITLE("5D tensor split");
+        int        shape[] = {2, 2, 2, 2, 3};
+        mt_tensor *t       = mt_tensor_alloc_values(
+            shape, 5,
+            (mt_float[]){1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12,
+
+                               13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+
+                               25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36,
+
+                               37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48});
+        int        splits[] = {1, 1};
+        mt_tensor *result[2];
+        mt_tensor_split(t, 1, splits, 2, result);
+
+        MT_ASSERT_TEST(
+            "5D split[0] shape",
+            mt_arr_same(result[0]->shape, (int[]){2, 1, 2, 2, 3}, 5, SZ_I));
+        MT_ASSERT_TEST("5D split[0] data",
+                       mt_arr_same(result[0]->data,
+                                   (mt_float[]){1,  2,  3,  4,  5,  6,
+                                                7,  8,  9,  10, 11, 12,
+
+                                                25, 26, 27, 28, 29, 30,
+                                                31, 32, 33, 34, 35, 36},
+                                   24, SZ_F));
+        MT_ASSERT_TEST(
+            "5D split[1] shape",
+            mt_arr_same(result[1]->shape, (int[]){2, 1, 2, 2, 3}, 5, SZ_I));
+        MT_ASSERT_TEST("5D split[1] data",
+                       mt_arr_same(result[1]->data,
+                                   (mt_float[]){13, 14, 15, 16, 17, 18,
+                                                19, 20, 21, 22, 23, 24,
+
+                                                37, 38, 39, 40, 41, 42,
+                                                43, 44, 45, 46, 47, 48},
+                                   24, SZ_F));
+
+        mt_tensor_free(t);
+        mt_tensor_free(result[0]);
+        mt_tensor_free(result[1]);
+    }
 }
 
 int main() {
@@ -612,7 +777,11 @@ int main() {
     test_slice(&s);
     test_concat(&s);
     test_tensor_pad(&s);
+    test_tensor_split(&s);
 
     printf("FAILED: %d, PASSED: %d\n", s.failed, s.pass);
+
     return 0;
 }
+
+// clang-format on

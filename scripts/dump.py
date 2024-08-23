@@ -458,7 +458,9 @@ def write_split(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
     write_layer_header(f, LayerKind.SPLIT.value, node)
+    axis = node["attributes"]["axis"]
     splits = node["attributes"]["split"]
+    np.array(axis, dtype=np.int32).tofile(f)
     np.array(len(splits), dtype=np.int32).tofile(f)
     np.array(splits, dtype=np.int32).tofile(f)
     print(f"wrote Split {id}")

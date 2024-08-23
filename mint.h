@@ -237,6 +237,8 @@ mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int *pads);
 mt_tensor *mt_mul(mt_tensor *a, mt_tensor *b);
 // Relu activation function, in-place version.
 void       mt_relu_inplace(mt_tensor *t);
+// Sigmoid activation function, in-place version.
+void       mt_sigmoid_inplace(mt_tensor *t);
 // Element-wise subtraction
 mt_tensor *mt_sub(mt_tensor *a, mt_tensor *b);
 
@@ -270,6 +272,10 @@ void mt_tensor_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim);
 // Tensor slice
 mt_tensor *mt_tensor_slice(mt_tensor *t, int *starts, int *ends, int *axes,
                            int *steps, int num_axes);
+// Split tensor into `n_split` parts
+void       mt_tensor_split(mt_tensor *t, int axis, int *splits, int n_split,
+                           mt_tensor **out);
+// Unsqueeze at given axis
 void       mt_tensor_unsqueeze_inplace(mt_tensor *t, int axis);
 
 /*
@@ -468,6 +474,7 @@ typedef struct mt_layer {
 
         // MT_LAYER_SPLIT
         struct {
+            int axis;
             int n_split;
             int splits[MAX_TENSOR_SPLITS];
         } split;
@@ -1977,6 +1984,16 @@ void mt_relu_inplace(mt_tensor *t) {
     }
 }
 
+void mt_sigmoid_inplace(mt_tensor *t) {
+    int       n    = mt_tensor_count_element(t);
+    mt_float *data = t->data;
+
+#pragma omp parallel for simd schedule(static)
+    for (int i = 0; i < n; ++i) {
+        data[i] = 1 / (1 + expf(-data[i]));
+    }
+}
+
 static mt_float mt__s_sub(mt_float a, mt_float b) { return a - b; }
 mt_tensor      *mt_sub(mt_tensor *a, mt_tensor *b) {
     return mt__binop(a, b, mt__s_sub);
@@ -2097,6 +2114,61 @@ void mt_tensor_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim) {
                 "tensor with length %d cannot be reshaped into length of %d",
                 tensor_old_element_len, tensor_new_element_len);
     t->ndim = new_ndim;
+}
+
+void mt_tensor_split(mt_tensor *t, int axis, int *splits, int n_split,
+                     mt_tensor **out) {
+    MT_ASSERT(axis >= 0 && axis < t->ndim,
+              "axis cannot be negative or exceeding tensor ndim");
+
+    // Calculate total split size and verify it matches the tensor dimension
+    int total_split = 0;
+    for (int i = 0; i < n_split; i++) {
+        total_split += splits[i];
+    }
+    MT_ASSERT_F(total_split == t->shape[axis],
+                "Total split size (%d) must match the tensor dimension along "
+                "the split axis (%d)",
+                total_split, t->shape[axis]);
+
+    // Calculate strides
+    int strides[MAX_TENSOR_NDIM];
+    strides[t->ndim - 1] = 1;
+    for (int i = t->ndim - 2; i >= 0; i--) {
+        strides[i] = strides[i + 1] * t->shape[i + 1];
+    }
+
+    // Split the tensor
+    int offset = 0;
+    for (int i = 0; i < n_split; i++) {
+        // Create new shape for split tensor
+        int new_shape[MAX_TENSOR_NDIM];
+        memcpy(new_shape, t->shape, t->ndim * sizeof(int));
+        new_shape[axis] = splits[i];
+
+        // Allocate split tensor
+        out[i] = mt_tensor_alloc(new_shape, t->ndim);
+
+        // Calculate size of each split
+        int split_size    = splits[i] * strides[axis];
+        int pre_axis_size = 1;
+        for (int j = 0; j < axis; j++) {
+            pre_axis_size *= t->shape[j];
+        }
+        int post_axis_size = strides[axis];
+
+        // Copy data to split tensor
+        for (int j = 0; j < pre_axis_size; j++) {
+            for (int k = 0; k < splits[i]; k++) {
+                memcpy(out[i]->data + (j * splits[i] + k) * post_axis_size,
+                       t->data + offset +
+                           (j * t->shape[axis] + k) * post_axis_size,
+                       post_axis_size * sizeof(mt_float));
+            }
+        }
+
+        offset += split_size;
+    }
 }
 
 void mt_tensor_unsqueeze_inplace(mt_tensor *t, int dim) {
@@ -2360,6 +2432,7 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len) {
         } else if (layer->kind == MT_LAYER_SOFTMAX) {
             mt_reader_read(&layer->data.softmax.axis, sizeof(int), 1, &mp);
         } else if (layer->kind == MT_LAYER_SPLIT) {
+            mt_reader_read(&layer->data.split.axis, sizeof(int), 1, &mp);
             mt_reader_read(&layer->data.split.n_split, sizeof(int), 1, &mp);
             mt_reader_read(&layer->data.split.splits, sizeof(int),
                            layer->data.split.n_split, &mp);
@@ -2813,12 +2886,31 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         model->tensors[l->outputs[0]] = res;
         break;
     }
+    case MT_LAYER_SIGMOID: {
+        mt_tensor *input = model->tensors[l->inputs[0]];
+        res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
+        mt_sigmoid_inplace(res);
+        model->tensors[l->outputs[0]] = res;
+        break;
+    }
     case MT_LAYER_SOFTMAX: {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
         WARN_LOG("softmax is not implemented yet, so it is an identity "
                  "function now");
         model->tensors[l->outputs[0]] = res;
+        break;
+    }
+    case MT_LAYER_SPLIT: {
+        mt_tensor *input = model->tensors[l->inputs[0]];
+        mt_tensor *splits[MAX_TENSOR_SPLITS];
+        mt_tensor_split(input, l->data.split.axis, l->data.split.splits,
+                        l->data.split.n_split, splits);
+
+        for (int i = 0; i < l->data.split.n_split; i++) {
+            int out_idx             = l->outputs[i];
+            model->tensors[out_idx] = splits[i];
+        }
         break;
     }
     case MT_LAYER_TRANSPOSE: {
@@ -2828,7 +2920,8 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         break;
     }
     default:
-        ERROR_F("Cannot execute layer with type %d yet\n", l->kind);
+        ERROR_F("Cannot execute layer with type %s yet\n",
+                mt_layer_kind_to_string(l->kind));
     }
 }
 
