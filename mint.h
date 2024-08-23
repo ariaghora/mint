@@ -320,10 +320,12 @@ static const char *mt_layer_kind_strings[] = {
 #undef T
 };
 
-mt_model  *mt_model_load(const char *filename, int input_in_batch);
+mt_model  *mt_model_load(const char *filename);
 void       mt_model_free(mt_model *model);
 mt_tensor *mt_model_get_output(mt_model *model, const char *name);
-void       mt_model_run(mt_model *model);
+void       mt_model_run(mt_model *model,
+                        void (*callbak)(int layer_index, int layer_count, void *data),
+                        void *data);
 void       mt_model_set_input(mt_model *model, const char *name, mt_tensor *t);
 
 typedef struct mt_layer mt_layer;
@@ -2196,8 +2198,7 @@ mt_tensor *mt_tensor_memread(mt_reader *mp) {
     return t;
 }
 
-mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
-                                 int input_in_batch) {
+mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len) {
 
     mt_reader mp    = (mt_reader){model_bytes, 0, len};
     mt_model *model = (mt_model *)MT_MALLOC(sizeof(*model));
@@ -2350,7 +2351,7 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len,
     return model;
 }
 
-mt_model *mt_model_load(const char *filename, int input_in_batch) {
+mt_model *mt_model_load(const char *filename) {
     FILE *fp = fopen(filename, "rb");
     MT_ASSERT_F(fp != NULL, "failed to open %s", filename);
 
@@ -2362,7 +2363,7 @@ mt_model *mt_model_load(const char *filename, int input_in_batch) {
     unsigned char *buffer = (unsigned char *)MT_MALLOC(filelen * sizeof(char));
     // Read in the entire model file in a buffer
     fread(buffer, filelen, 1, fp);
-    mt_model *model = mt_model_load_from_mem(buffer, filelen, input_in_batch);
+    mt_model *model = mt_model_load_from_mem(buffer, filelen);
 
     free(buffer);
     fclose(fp);
@@ -2772,7 +2773,8 @@ mt_tensor *mt_model_get_output(mt_model *model, const char *name) {
 }
 
 #include <time.h>
-void mt_model_run(mt_model *model) {
+void mt_model_run(mt_model *model, void (*callback)(int, int, void *),
+                  void     *data) {
     int  sorted_ids[MAX_LAYER_COUNT] = {0};
     int *sorted_len_ptr = (int *)calloc(1, sizeof(*sorted_len_ptr));
 
@@ -2806,6 +2808,9 @@ void mt_model_run(mt_model *model) {
         double  time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
         total_time += time_spent;
         DEBUG_LOG_F("took %f", time_spent);
+
+        if (callback != NULL)
+            callback(i, *sorted_len_ptr, data);
     }
     DEBUG_LOG_F("total inference time: %f", total_time);
 
