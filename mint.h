@@ -266,6 +266,8 @@ mt_tensor *mt_tensor_pad(mt_tensor *t, int *pads, mt_pad_mode mode,
                          mt_float constant_val);
 // Swap tensor's dimensions
 mt_tensor *mt_tensor_permute_dims(mt_tensor *t, int *dims);
+// Print tensor content representation
+void       mt_tensor_print(mt_tensor *t);
 // Reshape tensor in-place. The old and new shape should be compatible.
 void mt_tensor_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim);
 // Tensor slice
@@ -2094,6 +2096,111 @@ mt_tensor *mt_tensor_slice(mt_tensor *input, int *starts, int *ends, int *axes,
     }
 
     return output;
+}
+
+#define MAX_ELEMENTS_PER_DIM 6
+#define EDGE_ITEMS           3
+static void mt__print_nested(const mt_float *data, int *shape, int ndim,
+                             int depth, int *index, int *strides,
+                             int *should_truncate);
+static void mt__print_nested(const mt_float *data, int *shape, int ndim,
+                             int depth, int *index, int *strides,
+                             int *should_truncate) {
+    if (depth == ndim) {
+        int flat_index = 0;
+        for (int i = 0; i < ndim; i++) {
+            flat_index += index[i] * strides[i];
+        }
+        mt_float value = data[flat_index];
+
+        // Handle very small numbers
+        if (fabs(value) < 0.000001 && value != 0) {
+            printf("%13s", "0");
+        } else {
+            // Use %f for fixed-point notation and limit to 6 decimal places
+            printf("%13.6f", value);
+        }
+        return;
+    }
+
+    printf("[");
+    int limit = should_truncate[depth] ? EDGE_ITEMS : shape[depth];
+    for (int i = 0; i < limit; i++) {
+        if (i > 0) {
+            if (depth == ndim - 1)
+                printf(" ");
+            else {
+                printf("\n");
+                for (int j = 0; j <= depth; j++)
+                    printf(" ");
+            }
+        }
+        index[depth] = i;
+        mt__print_nested(data, shape, ndim, depth + 1, index, strides,
+                         should_truncate);
+    }
+
+    if (should_truncate[depth]) {
+        if (depth == ndim - 1) {
+            printf(" ...");
+        } else {
+            printf("\n ...");
+            for (int i = 0; i < depth; i++)
+                printf(" ");
+        }
+        for (int i = shape[depth] - EDGE_ITEMS; i < shape[depth]; i++) {
+            if (depth == ndim - 1) {
+                printf(" ");
+            } else {
+                printf("\n");
+                for (int j = 0; j <= depth; j++)
+                    printf(" ");
+            }
+            index[depth] = i;
+            mt__print_nested(data, shape, ndim, depth + 1, index, strides,
+                             should_truncate);
+        }
+    }
+
+    if (depth > 0)
+        printf("]");
+    else
+        printf("]]");
+}
+
+void mt_tensor_print(mt_tensor *t) {
+    if (t == NULL) {
+        printf("mt_tensor(NULL)\n");
+        return;
+    }
+
+    // Print tensor shape
+    printf("mt_tensor(");
+    for (int i = 0; i < t->ndim; i++) {
+        printf("%d", t->shape[i]);
+        if (i < t->ndim - 1)
+            printf(", ");
+    }
+    printf(", dtype=float)\n");
+
+    // Calculate strides
+    int strides[MAX_TENSOR_NDIM];
+    strides[t->ndim - 1] = 1;
+    for (int i = t->ndim - 2; i >= 0; i--) {
+        strides[i] = strides[i + 1] * t->shape[i + 1];
+    }
+
+    // Determine if each dimension should be truncated
+    int should_truncate[MAX_TENSOR_NDIM];
+    for (int i = 0; i < t->ndim; i++) {
+        should_truncate[i] = (t->shape[i] > MAX_ELEMENTS_PER_DIM);
+    }
+
+    // Print tensor data
+    int index[MAX_TENSOR_NDIM] = {0};
+    mt__print_nested(t->data, t->shape, t->ndim, 0, index, strides,
+                     should_truncate);
+    printf("\n");
 }
 
 void mt_tensor_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim) {
