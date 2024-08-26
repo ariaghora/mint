@@ -954,6 +954,72 @@ void test_conv2d(Stats *stats) {
         mt_tensor_free(bias);
         mt_tensor_free(output);
     }
+
+    MT_SECTION_TITLE("Conv2D with 5 output channels (NCHW)");
+    {
+        // Input: 1x3x4x4 (NCHW)
+        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(1, 3, 4, 4), 4,
+                                                  MT_ARR_FLOAT(
+                                                    1,  2,  3,  4,
+                                                    5,  6,  7,  8,
+                                                    9, 10, 11, 12,
+                                                   13, 14, 15, 16,
+
+                                                   17, 18, 19, 20,
+                                                   21, 22, 23, 24,
+                                                   25, 26, 27, 28,
+                                                   29, 30, 31, 32,
+
+                                                   33, 34, 35, 36,
+                                                   37, 38, 39, 40,
+                                                   41, 42, 43, 44,
+                                                   45, 46, 47, 48
+                                                  ));
+        
+        // Weight: 5x3x2x2
+        mt_tensor *weight = mt_tensor_alloc_values(MT_ARR_INT(5, 3, 2, 2), 4,
+                                                   MT_ARR_FLOAT(
+                                                     1,  2,  3,  4,   5,  6,  7,  8,   9, 10, 11, 12,
+                                                    13, 14, 15, 16,  17, 18, 19, 20,  21, 22, 23, 24,
+                                                    25, 26, 27, 28,  29, 30, 31, 32,  33, 34, 35, 36,
+                                                    37, 38, 39, 40,  41, 42, 43, 44,  45, 46, 47, 48,
+                                                    49, 50, 51, 52,  53, 54, 55, 56,  57, 58, 59, 60
+                                                   ));
+        
+        // Bias: 5
+        mt_tensor *bias = mt_tensor_alloc_values(MT_ARR_INT(5), 1, MT_ARR_FLOAT(1, 2, 3, 4, 5));
+        
+        int stride = 2;
+        int pads[4] = {0, 0, 0, 0};  // top, left, bottom, right
+        
+        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads);
+        
+        MT_ASSERT_TEST("5 output channels conv2d shape", mt_arr_same(output->shape, MT_ARR_INT(1, 5, 2, 2), 4, SZ_I));
+        
+        mt_float expected[] = {
+            2061.0, 2217.0,
+            2685.0, 2841.0,
+
+            4870.0, 5314.0,
+            6646.0, 7090.0,
+
+            7679.0, 8411.0,
+            10607.0, 11339.0,
+
+            10488.0, 11508.0,
+            14568.0, 15588.0,
+
+            13297.0, 14605.0,
+            18529.0, 19837.0
+        };
+        
+        MT_ASSERT_TEST("5 output channels conv2d data", mt_arr_same(output->data, expected, 5 * 2 * 2, SZ_F));
+        
+        mt_tensor_free(input);
+        mt_tensor_free(weight);
+        mt_tensor_free(bias);
+        mt_tensor_free(output);
+    }
 }
 
 int main() {
