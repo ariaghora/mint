@@ -253,6 +253,9 @@ mt_tensor *mt_tensor_alloc_fill(int *shape, int ndim, mt_float value);
 mt_tensor *mt_tensor_alloc_values(int *shape, int ndim, mt_float *values);
 // Allocate tensor and fill the data with random values, ranging from 0 to 1
 mt_tensor *mt_tensor_alloc_random(int *shape, int ndim);
+// Clone a tensor. The new tensor will manage its own memory region for its
+// data.
+mt_tensor *mt_tensor_clone(mt_tensor *t);
 // Get the number of elements of a tensor
 int        mt_tensor_count_element(mt_tensor *t);
 // Helper function to print tensor summary
@@ -602,6 +605,10 @@ typedef struct mt_model {
                 __VA_ARGS__);                                                  \
         exit(1);                                                               \
     } while (0)
+
+mt_tensor *mt_tensor_clone(mt_tensor *t) {
+    return mt_tensor_alloc_values(t->shape, t->ndim, t->data);
+}
 
 int mt_tensor_count_element(mt_tensor *t) {
     int count = 1;
