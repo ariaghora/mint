@@ -2774,9 +2774,9 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         int input_shape[]  = {input->shape[2], input->shape[3]};
 
         // adjust paddings
-        mt__auto_pad_to_explicit_paddings(l->data.conv_2d.auto_pad, input_shape,
-                                          kernel_shape, strides, 2,
-                                          l->data.conv_2d.pads);
+        mt__auto_pad_to_explicit_paddings(
+            (mt__autopad_mode)l->data.conv_2d.auto_pad, input_shape,
+            kernel_shape, strides, 2, l->data.conv_2d.pads);
 
         res = mt_convolve_2d(input, w, b, l->data.conv_2d.stride,
                              l->data.conv_2d.pads);
@@ -2874,9 +2874,9 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         int strides[]      = {l->data.max_pool_2d.stride,
                               l->data.max_pool_2d.stride};
         int input_shape[]  = {input->shape[2], input->shape[3]};
-        mt__auto_pad_to_explicit_paddings(l->data.max_pool_2d.auto_pad,
-                                          input_shape, kernel_shape, strides, 2,
-                                          l->data.max_pool_2d.pads);
+        mt__auto_pad_to_explicit_paddings(
+            (mt__autopad_mode)l->data.max_pool_2d.auto_pad, input_shape,
+            kernel_shape, strides, 2, l->data.max_pool_2d.pads);
 
         res =
             mt_maxpool_2d(input, l->data.max_pool_2d.size,
