@@ -209,7 +209,7 @@ mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride, int *pad);
 mt_tensor *mt_concat(mt_tensor **inputs, int num_inputs, int axis);
 // Convolution 2d
 mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
-                          int *pads);
+                          int *pads, int group);
 // Element-wise division
 mt_tensor *mt_div(mt_tensor *a, mt_tensor *b);
 // Element-wise exponentiation
@@ -427,6 +427,7 @@ typedef struct mt_layer {
             int b_id;
             int stride;
             int pads[4];
+            int group;
         } conv_2d;
 
         // MT_LAYER_DENSE
@@ -1127,7 +1128,7 @@ mt_tensor *mt_convolve_2d_single(mt_tensor *x, mt_tensor *w, mt_tensor *b,
 }
 
 mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
-                          int *pads) {
+                          int *pads, int group) {
     MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional (NCHW format)");
     MT_ASSERT(w->ndim == 4, "Weight tensor must be 4-dimensional");
     MT_ASSERT(b->ndim == 1, "Bias tensor must be 1-dimensional");
@@ -2786,7 +2787,7 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
             kernel_shape, strides, 2, l->data.conv_2d.pads);
 
         res = mt_convolve_2d(input, w, b, l->data.conv_2d.stride,
-                             l->data.conv_2d.pads);
+                             l->data.conv_2d.pads, l->data.conv_2d.group);
         mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
@@ -3079,7 +3080,7 @@ mt_tensor *mt_model_get_output(mt_model *model, const char *name) {
 
 #include <time.h>
 void mt_model_run(mt_model *model, void (*callback)(int, int, void *),
-                  void     *data) {
+                  void *data) {
     int  sorted_ids[MAX_LAYER_COUNT] = {0};
     int *sorted_len_ptr = (int *)calloc(1, sizeof(*sorted_len_ptr));
 
