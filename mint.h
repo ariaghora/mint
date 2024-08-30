@@ -1132,6 +1132,12 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
     MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional (NCHW format)");
     MT_ASSERT(w->ndim == 4, "Weight tensor must be 4-dimensional");
     MT_ASSERT(b->ndim == 1, "Bias tensor must be 1-dimensional");
+    MT_ASSERT(x->shape[1] % group == 0,
+              "Input channels must be divisible by group");
+    MT_ASSERT(w->shape[0] % group == 0,
+              "Output channels must be divisible by group");
+    MT_ASSERT(w->shape[1] == x->shape[1] / group,
+              "Input channels per group must match");
 
     int batch_size = x->shape[0];
     int C_in       = x->shape[1];
@@ -1157,19 +1163,45 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
 
     // Process each item in the batch
     for (int n = 0; n < batch_size; n++) {
-        mt_tensor *temp_input = mt_tensor_alloc_values(
-            (int[]){C_in, H_in, W_in}, 3, x->data + n * C_in * H_in * W_in);
+        // Process each group
+        for (int g = 0; g < group; g++) {
+            int C_in_start  = g * (C_in / group);
+            int C_out_start = g * (C_out / group);
 
-        // Perform convolution for the current batch item
-        mt_tensor *temp_output =
-            mt_convolve_2d_single(temp_input, w, b, stride, pads);
+            mt_tensor temp_input = {.data = x->data + n * C_in * H_in * W_in +
+                                            C_in_start * H_in * W_in,
+                                    .shape = {C_in / group, H_in, W_in},
+                                    .ndim  = 3};
 
-        // Copy the result to the output tensor
-        memcpy(output->data + n * C_out * H_out * W_out, temp_output->data,
-               C_out * H_out * W_out * sizeof(mt_float));
+            mt_tensor temp_weight = {
+                .data  = w->data + C_out_start * (C_in / group) * K_h * K_w,
+                .shape = {C_out / group, C_in / group, K_h, K_w},
+                .ndim  = 4};
 
-        mt_tensor_free(temp_input);
-        mt_tensor_free(temp_output);
+            mt_tensor temp_bias = {.data  = b->data + C_out_start,
+                                   .shape = {C_out / group},
+                                   .ndim  = 1};
+
+            // Perform convolution for the current group
+            mt_tensor *temp_output = mt_convolve_2d_single(
+                &temp_input, &temp_weight, &temp_bias, stride, pads);
+
+            // Copy the result to the output tensor
+            for (int c = 0; c < C_out / group; c++) {
+                for (int h = 0; h < H_out; h++) {
+                    for (int w = 0; w < W_out; w++) {
+                        int out_idx =
+                            ((n * C_out + (C_out_start + c)) * H_out + h) *
+                                W_out +
+                            w;
+                        int temp_idx          = (c * H_out + h) * W_out + w;
+                        output->data[out_idx] = temp_output->data[temp_idx];
+                    }
+                }
+            }
+
+            mt_tensor_free(temp_output);
+        }
     }
 
     return output;
