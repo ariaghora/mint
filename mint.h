@@ -3277,10 +3277,7 @@ MTDEF void mt__layer_forward(mt_layer *l, mt_model *model) {
     case MT_LAYER_SOFTMAX: {
         mt_tensor *input = model->tensors[l->inputs[0]];
         int        axis  = l->data.softmax.axis;
-        printf("axis: %d\n", axis);
-        res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
-        WARN_LOG("softmax is not implemented yet, so it is an identity "
-                 "function now");
+        res              = mt_softmax(input, axis);
         mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
