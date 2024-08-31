@@ -41,6 +41,7 @@ LayerKind = Enum(
         "RESHAPE",
         "RESIZE",
         "SIGMOID",
+        "SLICE",
         "SOFTMAX",
         "SPLIT",
         "SUB",
@@ -329,8 +330,8 @@ def write_conv(
 ):
     write_layer_header(f, LayerKind.CONV_2D.value, node)
 
+    dilations = node["attributes"].get("dilations", [1, 1])
     group = node["attributes"].get("group", 1)
-    assert group == 1, "cannot handle grouped convolution yet"
 
     # NOTE: we refuse mutliple different stride values for now
     strides = node["attributes"]["strides"]
@@ -350,6 +351,8 @@ def write_conv(
     np.array(strides[0], dtype=np.int32).tofile(f)
     np.array(auto_pad_id, dtype=np.int32).tofile(f)
     np.array(pads, dtype=np.int32).tofile(f)
+    np.array(dilations, dtype=np.int32).tofile(f)
+    np.array(group, dtype=np.int32).tofile(f)
 
     print(f"wrote Conv {id}")
 
@@ -445,6 +448,11 @@ def write_sigmoid(
     write_layer_header(f, LayerKind.SIGMOID.value, node)
     print(f"wrote Sigmoid {id}")
 
+def write_slice(
+    f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
+):
+    write_layer_header(f, LayerKind.SLICE.value, node)
+    print(f"wrote Slice {id}")
 
 def write_softmax(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
@@ -552,6 +560,8 @@ if __name__ == "__main__":
                     write_resize(f, id, node, model["tensors"])
                 case "Sigmoid":
                     write_sigmoid(f, id, node, model["tensors"])
+                case "Slice":
+                    write_slice(f, id, node, model["tensors"])
                 case "Softmax":
                     write_softmax(f, id, node, model["tensors"])
                 case "Split":

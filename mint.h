@@ -209,7 +209,7 @@ mt_tensor *mt_avg_pool_2d(mt_tensor *x, int kernel_size, int stride, int *pad);
 mt_tensor *mt_concat(mt_tensor **inputs, int num_inputs, int axis);
 // Convolution 2d
 mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
-                          int *pads, int group);
+                          int *pads, int *dilations, int group);
 // Element-wise division
 mt_tensor *mt_div(mt_tensor *a, mt_tensor *b);
 // Element-wise exponentiation
@@ -314,6 +314,7 @@ typedef struct mt_model mt_model;
     T(MT_LAYER_RESHAPE)                                                        \
     T(MT_LAYER_RESIZE)                                                         \
     T(MT_LAYER_SIGMOID)                                                        \
+    T(MT_LAYER_SLICE)                                                          \
     T(MT_LAYER_SOFTMAX)                                                        \
     T(MT_LAYER_SPLIT)                                                          \
     T(MT_LAYER_SUB)                                                            \
@@ -427,6 +428,7 @@ typedef struct mt_layer {
             int b_id;
             int stride;
             int pads[4];
+            int dilations[2];
             int group;
         } conv_2d;
 
@@ -1128,7 +1130,7 @@ mt_tensor *mt_convolve_2d_single(mt_tensor *x, mt_tensor *w, mt_tensor *b,
 }
 
 mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
-                          int *pads, int group) {
+                          int *pads, int *dilations, int group) {
     MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional (NCHW format)");
     MT_ASSERT(w->ndim == 4, "Weight tensor must be 4-dimensional");
     MT_ASSERT(b->ndim == 1, "Bias tensor must be 1-dimensional");
@@ -2520,12 +2522,14 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len) {
             mt_reader_read(&layer->data.conv_2d.stride, sizeof(int), 1, &mp);
             mt_reader_read(&layer->data.conv_2d.auto_pad, sizeof(int), 1, &mp);
             mt_reader_read(&layer->data.conv_2d.pads, sizeof(int), 4, &mp);
-
+            mt_reader_read(&layer->data.conv_2d.group, sizeof(int), 1, &mp);
             int w_idx                = layer->inputs[1];
             int b_idx                = layer->inputs[2];
             layer->data.conv_2d.w_id = w_idx;
             layer->data.conv_2d.b_id = b_idx;
         } else if (layer->kind == MT_LAYER_DENSE) {
+            // nothing to read
+        } else if (layer->kind == MT_LAYER_DIV) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_DROPOUT) {
             // nothing to read
@@ -2574,6 +2578,8 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len) {
             mt_reader_read(&layer->data.resize.mode, sizeof(int), 1, &mp);
         } else if (layer->kind == MT_LAYER_SIGMOID) {
             // nothing to read
+        } else if (layer->kind == MT_LAYER_SLICE) {
+            // nothing to read
         } else if (layer->kind == MT_LAYER_SOFTMAX) {
             mt_reader_read(&layer->data.softmax.axis, sizeof(int), 1, &mp);
         } else if (layer->kind == MT_LAYER_SPLIT) {
@@ -2581,6 +2587,8 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len) {
             mt_reader_read(&layer->data.split.n_split, sizeof(int), 1, &mp);
             mt_reader_read(&layer->data.split.splits, sizeof(int),
                            layer->data.split.n_split, &mp);
+        } else if (layer->kind == MT_LAYER_SUB) {
+            // nothing to read
         } else if (layer->kind == MT_LAYER_TANH) {
             // nothing to read
         } else if (layer->kind == MT_LAYER_TRANSPOSE) {
@@ -2819,7 +2827,9 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
             kernel_shape, strides, 2, l->data.conv_2d.pads);
 
         res = mt_convolve_2d(input, w, b, l->data.conv_2d.stride,
-                             l->data.conv_2d.pads, l->data.conv_2d.group);
+                             l->data.conv_2d.pads, l->data.conv_2d.dilations,
+                             l->data.conv_2d.group);
+        mt_tensor_debug_info(res);
         mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
@@ -2829,6 +2839,14 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         mt_tensor *b     = model->tensors[l->inputs[2]];
 
         res = mt_affine(input, w, b);
+        mt__model_set_tensor(model, l->outputs[0], res);
+        break;
+    }
+    case MT_LAYER_DIV: {
+        mt_tensor *a = model->tensors[l->inputs[0]];
+        mt_tensor *b = model->tensors[l->inputs[1]];
+
+        res = mt_div(a, b);
         mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
@@ -3063,6 +3081,14 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
+    case MT_LAYER_SLICE: {
+        mt_tensor *input = model->tensors[l->inputs[0]];
+        // res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
+        // mt_sigmoid_inplace(res);
+        mt__model_set_tensor(model, l->outputs[0], res);
+        exit(1);
+        break;
+    }
     case MT_LAYER_SOFTMAX: {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
@@ -3081,6 +3107,14 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
             int out_idx = l->outputs[i];
             mt__model_set_tensor(model, out_idx, splits[i]);
         }
+        break;
+    }
+    case MT_LAYER_SUB: {
+        mt_tensor *a = model->tensors[l->inputs[0]];
+        mt_tensor *b = model->tensors[l->inputs[1]];
+
+        res = mt_sub(a, b);
+        mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_TRANSPOSE: {
