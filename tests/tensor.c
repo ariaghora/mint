@@ -1284,6 +1284,70 @@ void test_conv2d(Stats *stats) {
     }
 }
 
+void test_reduce_min(Stats *stats) {
+    MT_SECTION_TITLE("Reduce Min");
+
+    // Test case 1: 2D tensor, reduce along axis 0
+    {
+        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(3, 4), 2,
+                                                  MT_ARR_FLOAT(1, 2, 3, 4,
+                                                               5, 0, 7, 8,
+                                                               9, 10, 11, 12));
+        mt_tensor *output_no_keep = mt_min(input, 0, 0);
+        mt_tensor *output_keep = mt_min(input, 0, 1);
+
+        MT_ASSERT_TEST("2D reduce min axis 0 shape (no keep)", mt_arr_same(output_no_keep->shape, MT_ARR_INT(4), 1, SZ_I));
+        MT_ASSERT_TEST("2D reduce min axis 0 data (no keep)", mt_arr_same(output_no_keep->data, MT_ARR_FLOAT(1, 0, 3, 4), 4, SZ_F));
+
+        MT_ASSERT_TEST("2D reduce min axis 0 shape (keep)", mt_arr_same(output_keep->shape, MT_ARR_INT(1, 4), 2, SZ_I));
+        MT_ASSERT_TEST("2D reduce min axis 0 data (keep)", mt_arr_same(output_keep->data, MT_ARR_FLOAT(1, 0, 3, 4), 4, SZ_F));
+
+        mt_tensor_free(input);
+        mt_tensor_free(output_no_keep);
+        mt_tensor_free(output_keep);
+    }
+
+    // Test case 2: 3D tensor, reduce along axis 1
+    {
+        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(2, 3, 2), 3,
+                                                  MT_ARR_FLOAT(1, 2,
+                                                               3, 4,
+                                                               5, 6,
+                                                               7, 8,
+                                                               9, 0,
+                                                               11, 12));
+        mt_tensor *output_no_keep = mt_min(input, 1, 0);
+        mt_tensor *output_keep = mt_min(input, 1, 1);
+
+        MT_ASSERT_TEST("3D reduce min axis 1 shape (no keep)", mt_arr_same(output_no_keep->shape, MT_ARR_INT(2, 2), 2, SZ_I));
+        MT_ASSERT_TEST("3D reduce min axis 1 data (no keep)", mt_arr_same(output_no_keep->data, MT_ARR_FLOAT(1, 2, 7, 0), 4, SZ_F));
+
+        MT_ASSERT_TEST("3D reduce min axis 1 shape (keep)", mt_arr_same(output_keep->shape, MT_ARR_INT(2, 1, 2), 3, SZ_I));
+        MT_ASSERT_TEST("3D reduce min axis 1 data (keep)", mt_arr_same(output_keep->data, MT_ARR_FLOAT(1, 2, 7, 0), 4, SZ_F));
+
+        mt_tensor_free(input);
+        mt_tensor_free(output_no_keep);
+        mt_tensor_free(output_keep);
+    }
+
+    // Test case 3: 1D tensor, reduce along axis 0
+    {
+        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(5), 1,
+                                                  MT_ARR_FLOAT(5, 2, 8, 1, 9));
+        mt_tensor *output_no_keep = mt_min(input, 0, 0);
+        mt_tensor *output_keep = mt_min(input, 0, 1);
+
+        MT_ASSERT_TEST("1D reduce min axis 0 shape (no keep)", mt_arr_same(output_no_keep->shape, MT_ARR_INT(1), 1, SZ_I));
+        MT_ASSERT_TEST("1D reduce min axis 0 data (no keep)", mt_arr_same(output_no_keep->data, MT_ARR_FLOAT(1), 1, SZ_F));
+
+        MT_ASSERT_TEST("1D reduce min axis 0 shape (keep)", mt_arr_same(output_keep->shape, MT_ARR_INT(1), 1, SZ_I));
+        MT_ASSERT_TEST("1D reduce min axis 0 data (keep)", mt_arr_same(output_keep->data, MT_ARR_FLOAT(1), 1, SZ_F));
+
+        mt_tensor_free(input);
+        mt_tensor_free(output_no_keep);
+        mt_tensor_free(output_keep);
+    }
+}
 int main() {
     Stats s = {0};
 
@@ -1294,6 +1358,7 @@ int main() {
     test_tensor_pad(&s);
     test_tensor_split(&s);
     test_conv2d(&s);
+    test_reduce_min(&s);
 
     printf("FAILED: %d, PASSED: %d\n", s.failed, s.pass);
 
