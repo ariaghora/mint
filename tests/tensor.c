@@ -788,7 +788,7 @@ void test_conv2d(Stats *stats) {
         int stride = 1;
         int pads[4] = {0, 0, 0, 0};  // top, left, bottom, right
         
-        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, 1);
+        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, NULL, 1);
         
         MT_ASSERT_TEST("Basic conv2d shape", mt_arr_same(output->shape, MT_ARR_INT(1, 1, 2, 2), 4, SZ_I));
         MT_ASSERT_TEST("Basic conv2d data", mt_arr_same(output->data, MT_ARR_FLOAT(38, 48, 68, 78), 4, SZ_F));
@@ -817,7 +817,7 @@ void test_conv2d(Stats *stats) {
         int stride = 1;
         int pads[4] = {1, 1, 1, 1};  // top, left, bottom, right
         
-        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, 1);
+        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, NULL, 1);
         
         MT_ASSERT_TEST("Padded conv2d shape", mt_arr_same(output->shape, MT_ARR_INT(1, 1, 3, 3), 4, SZ_I));
         mt_float expected[] = {
@@ -853,7 +853,7 @@ void test_conv2d(Stats *stats) {
         int stride = 2;
         int pads[4] = {0, 0, 0, 0};  // top, left, bottom, right
         
-        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, 1);
+        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, NULL, 1);
         
         MT_ASSERT_TEST("Strided conv2d shape", mt_arr_same(output->shape, MT_ARR_INT(1, 1, 2, 2), 4, SZ_I));
         mt_float expected[] = {
@@ -898,7 +898,7 @@ void test_conv2d(Stats *stats) {
         int stride = 1;
         int pads[4] = {0, 0, 0, 0};  // top, left, bottom, right
         
-        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, 1);
+        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, NULL, 1);
         
         MT_ASSERT_TEST("Multi-channel conv2d shape", mt_arr_same(output->shape, MT_ARR_INT(1, 2, 2, 2), 4, SZ_I));
         mt_float expected[] = {
@@ -937,7 +937,7 @@ void test_conv2d(Stats *stats) {
         int stride = 1;
         int pads[4] = {0, 0, 0, 0};  // top, left, bottom, right
         
-        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, 1);
+        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, NULL, 1);
         
         MT_ASSERT_TEST("Batched conv2d shape", mt_arr_same(output->shape, MT_ARR_INT(2, 1, 2, 2), 4, SZ_I));
         mt_float expected[] = {
@@ -992,7 +992,7 @@ void test_conv2d(Stats *stats) {
         int stride = 2;
         int pads[4] = {0, 0, 0, 0};  // top, left, bottom, right
         
-        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, 1);
+        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, NULL, 1);
         
         MT_ASSERT_TEST("5 output channels conv2d shape", mt_arr_same(output->shape, MT_ARR_INT(1, 5, 2, 2), 4, SZ_I));
         
@@ -1076,7 +1076,7 @@ void test_conv2d(Stats *stats) {
         int pads[4] = {0, 0, 0, 0};  // top, left, bottom, right
         int group = 2;
 
-        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, group);
+        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, NULL, group);
 
         MT_ASSERT_TEST("Grouped conv2d shape", mt_arr_same(output->shape, MT_ARR_INT(1, 4, 2, 2), 4, SZ_I));
         
@@ -1135,7 +1135,7 @@ void test_conv2d(Stats *stats) {
         int pads[4] = {0, 0, 0, 0};  // top, left, bottom, right
         int group = 4;
 
-        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, group);
+        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, NULL, group);
 
         MT_ASSERT_TEST("4-group conv2d shape", mt_arr_same(output->shape, MT_ARR_INT(1, 8, 2, 2), 4, SZ_I));
         
@@ -1151,6 +1151,131 @@ void test_conv2d(Stats *stats) {
         };
         
         MT_ASSERT_TEST("4-group conv2d data", mt_arr_same(output->data, expected, 32, SZ_F));
+
+        mt_tensor_free(input);
+        mt_tensor_free(weight);
+        mt_tensor_free(bias);
+        mt_tensor_free(output);
+    }
+
+    MT_SECTION_TITLE("Dilated Conv2D");
+    {
+        // Input: 1x1x5x5 (NCHW)
+        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(1, 1, 5, 5), 4,
+                                                  MT_ARR_FLOAT(
+                                                    1,  2,  3,  4,  5,
+                                                    6,  7,  8,  9,  10,
+                                                    11, 12, 13, 14, 15,
+                                                    16, 17, 18, 19, 20,
+                                                    21, 22, 23, 24, 25
+                                                  ));
+        // Weight: 1x1x3x3
+        mt_tensor *weight = mt_tensor_alloc_values(MT_ARR_INT(1, 1, 3, 3), 4,
+                                                   MT_ARR_FLOAT(
+                                                     1, 2, 3,
+                                                     4, 5, 6,
+                                                     7, 8, 9
+                                                   ));
+        // Bias: 1
+        mt_tensor *bias = mt_tensor_alloc_values(MT_ARR_INT(1), 1, MT_ARR_FLOAT(1));
+
+        int stride = 1;
+        int pads[4] = {0, 0, 0, 0};  // top, left, bottom, right
+        int dilations[2] = {2, 2};
+
+        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, dilations, 1);
+
+        MT_ASSERT_TEST("Dilated conv2d shape", mt_arr_same(output->shape, MT_ARR_INT(1, 1, 1, 1), 4, SZ_I));
+        
+        mt_float expected[] = {778};
+        
+        MT_ASSERT_TEST("Dilated conv2d data", mt_arr_same(output->data, expected, 1, SZ_F));
+
+        mt_tensor_free(input);
+        mt_tensor_free(weight);
+        mt_tensor_free(bias);
+        mt_tensor_free(output);
+    }
+
+    MT_SECTION_TITLE("Grouped and Dilated Conv2D");
+    {
+        // Input: 1x4x5x5 (NCHW)
+        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(1, 4, 5, 5), 4,
+                                                  MT_ARR_FLOAT(
+                                                    1,  2,  3,  4,  5,
+                                                    6,  7,  8,  9,  10,
+                                                    11, 12, 13, 14, 15,
+                                                    16, 17, 18, 19, 20,
+                                                    21, 22, 23, 24, 25,
+
+                                                    26, 27, 28, 29, 30,
+                                                    31, 32, 33, 34, 35,
+                                                    36, 37, 38, 39, 40,
+                                                    41, 42, 43, 44, 45,
+                                                    46, 47, 48, 49, 50,
+
+                                                    51, 52, 53, 54, 55,
+                                                    56, 57, 58, 59, 60,
+                                                    61, 62, 63, 64, 65,
+                                                    66, 67, 68, 69, 70,
+                                                    71, 72, 73, 74, 75,
+
+                                                    76, 77, 78, 79, 80,
+                                                    81, 82, 83, 84, 85,
+                                                    86, 87, 88, 89, 90,
+                                                    91, 92, 93, 94, 95,
+                                                    96, 97, 98, 99, 100
+                                                  ));
+        // Weight: 4x2x3x3 (4 output channels, 2 input channels per group)
+        mt_tensor *weight = mt_tensor_alloc_values(MT_ARR_INT(4, 2, 3, 3), 4,
+                                                   MT_ARR_FLOAT(
+                                                     1, 2, 3,
+                                                     4, 5, 6,
+                                                     7, 8, 9,
+
+                                                     10, 11, 12,
+                                                     13, 14, 15,
+                                                     16, 17, 18,
+
+                                                     19, 20, 21,
+                                                     22, 23, 24,
+                                                     25, 26, 27,
+
+                                                     28, 29, 30,
+                                                     31, 32, 33,
+                                                     34, 35, 36,
+
+                                                     37, 38, 39,
+                                                     40, 41, 42,
+                                                     43, 44, 45,
+
+                                                     46, 47, 48,
+                                                     49, 50, 51,
+                                                     52, 53, 54,
+
+                                                     55, 56, 57,
+                                                     58, 59, 60,
+                                                     61, 62, 63,
+
+                                                     64, 65, 66,
+                                                     67, 68, 69,
+                                                     70, 71, 72
+                                                   ));
+        // Bias: 4
+        mt_tensor *bias = mt_tensor_alloc_values(MT_ARR_INT(4), 1, MT_ARR_FLOAT(1, 2, 3, 4));
+
+        int stride = 1;
+        int pads[4] = {0, 0, 0, 0};  // top, left, bottom, right
+        int dilations[2] = {2, 2};
+        int group = 2;
+
+        mt_tensor *output = mt_convolve_2d(input, weight, bias, stride, pads, dilations, group);
+
+        MT_ASSERT_TEST("Grouped and dilated conv2d shape", mt_arr_same(output->shape, MT_ARR_INT(1, 4, 1, 1), 4, SZ_I));
+        
+        mt_float expected[] = {5758.0, 14021.0, 63234.0, 87697.0};
+        
+        MT_ASSERT_TEST("Grouped and dilated conv2d data", mt_arr_same(output->data, expected, 4, SZ_F));
 
         mt_tensor_free(input);
         mt_tensor_free(weight);

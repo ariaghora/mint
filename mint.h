@@ -193,6 +193,9 @@ typedef enum {
     MT_PAD_EDGE,
 } mt_pad_mode;
 
+// float-valued reduce function
+typedef mt_float (*mt_reduce_func)(mt_float a, mt_float b);
+
 // Adaptive version of average pooling. This typically allows the use of any
 // arbitrary input size to obtain consistent size for the intermediate layer
 // representation.
@@ -235,6 +238,8 @@ mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b);
 mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int *pads);
 // Element-wise multiplication
 mt_tensor *mt_mul(mt_tensor *a, mt_tensor *b);
+// Generic reduce function
+void       mt_reduce(mt_tensor *t);
 // Relu activation function, in-place version.
 void       mt_relu_inplace(mt_tensor *t);
 // Sigmoid activation function, in-place version.
@@ -352,6 +357,7 @@ void mt_layer_debug_info(mt_layer *l);
 
 #ifdef MT_IMPLEMENTATION
 
+#include <limits.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -993,11 +999,12 @@ mt_tensor *mt_concat(mt_tensor **inputs, int num_inputs, int axis) {
     return output;
 }
 
-// Optimized im2col preparation
+// im2col preparation
 void mt__im2col(const mt_float *data, const int C_in, const int H_in,
                 const int W_in, const int K_h, const int K_w, const int stride,
                 const int pad_h_begin, const int pad_w_begin, const int H_out,
-                const int W_out, mt_float *im2col_data) {
+                const int W_out, const int dilation_h, const int dilation_w,
+                mt_float *im2col_data) {
     const int channels_col = C_in * K_h * K_w;
     const int output_size  = H_out * W_out;
 
@@ -1011,8 +1018,8 @@ void mt__im2col(const mt_float *data, const int C_in, const int H_in,
             int k_h   = k_idx / K_w;
             int k_w   = k_idx % K_w;
 
-            int h_in = h_out * stride + k_h - pad_h_begin;
-            int w_in = w_out * stride + k_w - pad_w_begin;
+            int h_in = h_out * stride + k_h * dilation_h - pad_h_begin;
+            int w_in = w_out * stride + k_w * dilation_w - pad_w_begin;
 
             int im2col_idx = c * output_size + output_idx;
             if (h_in >= 0 && h_in < H_in && w_in >= 0 && w_in < W_in) {
@@ -1026,7 +1033,7 @@ void mt__im2col(const mt_float *data, const int C_in, const int H_in,
 }
 
 mt_tensor *mt_convolve_2d_single(mt_tensor *x, mt_tensor *w, mt_tensor *b,
-                                 int stride, int *pads) {
+                                 int stride, int *pads, int *dilations) {
     MT_ASSERT(x->ndim == 3, "Input tensor must be 3-dimensional");
     MT_ASSERT(w->ndim == 4, "Weight tensor must be 4-dimensional");
     MT_ASSERT(b->ndim == 1, "Bias tensor must be 1-dimensional");
@@ -1048,9 +1055,16 @@ mt_tensor *mt_convolve_2d_single(mt_tensor *x, mt_tensor *w, mt_tensor *b,
     int pad_h_end   = pads[2];
     int pad_w_end   = pads[3];
 
-    // Calculate output dimensions with padding
-    int H_out = (H_in + pad_h_begin + pad_h_end - K_h) / stride + 1;
-    int W_out = (W_in + pad_w_begin + pad_w_end - K_w) / stride + 1;
+    int dilation_h = dilations ? dilations[0] : 1;
+    int dilation_w = dilations ? dilations[1] : 1;
+
+    // Calculate output dimensions with padding and dilation
+    int H_out =
+        (H_in + pad_h_begin + pad_h_end - dilation_h * (K_h - 1) - 1) / stride +
+        1;
+    int W_out =
+        (W_in + pad_w_begin + pad_w_end - dilation_w * (K_w - 1) - 1) / stride +
+        1;
 
 #ifdef MT_USE_IM2COL_CONV
     // Create im2col matrix
@@ -1060,7 +1074,7 @@ mt_tensor *mt_convolve_2d_single(mt_tensor *x, mt_tensor *w, mt_tensor *b,
         mt_tensor_alloc(MT_ARR_INT(im2col_rows, im2col_cols), 2);
 
     mt__im2col(x->data, C_in, H_in, W_in, K_h, K_w, stride, pad_h_begin,
-               pad_w_begin, H_out, W_out, im2col->data);
+               pad_w_begin, H_out, W_out, dilation_h, dilation_w, im2col->data);
 
     // Reshape weights
     mt_tensor *reshaped_w =
@@ -1101,8 +1115,10 @@ mt_tensor *mt_convolve_2d_single(mt_tensor *x, mt_tensor *w, mt_tensor *b,
                 for (int c_in = 0; c_in < C_in; c_in++) {
                     for (int kh = 0; kh < K_h; kh++) {
                         for (int kw = 0; kw < K_w; kw++) {
-                            int h_in = h_out * stride + kh - pad_h_begin;
-                            int w_in = w_out * stride + kw - pad_w_begin;
+                            int h_in =
+                                h_out * stride + kh * dilation_h - pad_h_begin;
+                            int w_in =
+                                w_out * stride + kw * dilation_w - pad_w_begin;
                             if (h_in >= 0 && h_in < H_in && w_in >= 0 &&
                                 w_in < W_in) {
                                 mt_float x_val = x->data[c_in * H_in * W_in +
@@ -1155,9 +1171,16 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
     int pad_h_end   = pads[2];
     int pad_w_end   = pads[3];
 
-    // Calculate output dimensions with padding
-    int H_out = (H_in + pad_h_begin + pad_h_end - K_h) / stride + 1;
-    int W_out = (W_in + pad_w_begin + pad_w_end - K_w) / stride + 1;
+    int dilation_h = dilations ? dilations[0] : 1;
+    int dilation_w = dilations ? dilations[1] : 1;
+
+    // Calculate output dimensions with padding and dilation
+    int H_out =
+        (H_in + pad_h_begin + pad_h_end - dilation_h * (K_h - 1) - 1) / stride +
+        1;
+    int W_out =
+        (W_in + pad_w_begin + pad_w_end - dilation_w * (K_w - 1) - 1) / stride +
+        1;
 
     // Allocate output tensor
     int        output_shape[4] = {batch_size, C_out, H_out, W_out};
@@ -1186,7 +1209,7 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
 
             // Perform convolution for the current group
             mt_tensor *temp_output = mt_convolve_2d_single(
-                &temp_input, &temp_weight, &temp_bias, stride, pads);
+                &temp_input, &temp_weight, &temp_bias, stride, pads, dilations);
 
             // Copy the result to the output tensor
             for (int c = 0; c < C_out / group; c++) {
@@ -2054,87 +2077,86 @@ static int mt__adjust_index(int index, int dim, int step) {
     }
 }
 
+#define MAX(a, b) (a > b ? a : b)
+#define MIN(a, b) (a < b ? a : b)
 mt_tensor *mt_tensor_slice(mt_tensor *input, int *starts, int *ends, int *axes,
                            int *steps, int num_axes) {
     int rank = input->ndim;
-    int effective_starts[MAX_TENSOR_NDIM], effective_ends[MAX_TENSOR_NDIM],
-        effective_steps[MAX_TENSOR_NDIM];
     int output_shape[MAX_TENSOR_NDIM];
+    memcpy(output_shape, input->shape, rank * sizeof(int));
 
-    for (int i = 0; i < num_axes; ++i) {
-        MT_ASSERT_F(
-            steps[i] >= 0,
-            "cannot slice with negative steps, but step on axis %d is %d",
-            axes[i], steps[i]);
-    }
-
-    // Initialize effective values
-    for (int i = 0; i < rank; i++) {
-        effective_starts[i] = 0;
-        effective_ends[i]   = input->shape[i];
-        effective_steps[i]  = 1;
-    }
-
-    // Adjust starts, ends, and steps based on provided axes
     for (int i = 0; i < num_axes; i++) {
         int axis = (axes != NULL) ? axes[i] : i;
         if (axis < 0)
             axis += rank;
+        MT_ASSERT(axis >= 0 && axis < rank, "Invalid axis");
 
-        effective_starts[axis] = mt__adjust_index(starts[i], input->shape[axis],
-                                                  steps ? steps[i] : 1);
-        effective_ends[axis] =
-            mt__adjust_index(ends[i], input->shape[axis], steps ? steps[i] : 1);
-        effective_steps[axis] = steps ? steps[i] : 1;
+        int dim_size = input->shape[axis];
+        int start = starts[i], end = ends[i], step = steps ? steps[i] : 1;
+        MT_ASSERT(step != 0, "Step cannot be zero");
 
-        // Calculate output shape
-        int slice_length = (effective_ends[axis] - effective_starts[axis] +
-                            effective_steps[axis] - 1) /
-                           effective_steps[axis];
-        output_shape[axis] = (slice_length < 0) ? 0 : slice_length;
+        // Clamp start and end to valid range, allowing negative indices
+        if (start >= dim_size)
+            start = step > 0 ? dim_size : dim_size - 1;
+        if (start < -dim_size)
+            start = step > 0 ? 0 : -1;
+        if (end >= dim_size)
+            end = dim_size;
+        if (end < -dim_size - 1)
+            end = -1;
+
+        // Convert negative indices to positive
+        if (start < 0)
+            start += dim_size;
+        if (end < 0)
+            end += dim_size;
+
+        // Ensure start and end are within bounds
+        start = step > 0 ? MAX(0, start) : MIN(dim_size - 1, start);
+        end   = step > 0 ? MIN(dim_size, end) : MAX(-1, end);
+
+        int slice_length   = step > 0 ? (end - start + step - 1) / step
+                                      : (start - end - step - 1) / (-step);
+        output_shape[axis] = MAX(0, slice_length);
     }
 
-    // Allocate output tensor
     mt_tensor *output = mt_tensor_alloc(output_shape, rank);
 
-    // Perform slicing
     int input_indices[MAX_TENSOR_NDIM]  = {0};
     int output_indices[MAX_TENSOR_NDIM] = {0};
-    int total_elements                  = 1;
-    for (int i = 0; i < rank; i++) {
-        total_elements *= output_shape[i];
-    }
 
-    for (int i = 0; i < total_elements; i++) {
-        // Calculate input indices
-        for (int j = 0; j < rank; j++) {
-            input_indices[j] =
-                effective_starts[j] + output_indices[j] * effective_steps[j];
-        }
+    while (1) {
+        int input_flat_index = 0, output_flat_index = 0;
+        int input_stride = 1, output_stride = 1;
 
-        // Copy data
-        int input_flat_index  = 0;
-        int output_flat_index = 0;
-        int input_stride      = 1;
-        int output_stride     = 1;
-
-        for (int j = rank - 1; j >= 0; j--) {
-            input_flat_index += input_indices[j] * input_stride;
-            output_flat_index += output_indices[j] * output_stride;
-            input_stride *= input->shape[j];
-            output_stride *= output_shape[j];
+        for (int i = rank - 1; i >= 0; i--) {
+            int idx = output_indices[i];
+            if (axes) {
+                for (int j = 0; j < num_axes; j++) {
+                    if (axes[j] == i) {
+                        idx = starts[j] + idx * (steps ? steps[j] : 1);
+                        break;
+                    }
+                }
+            } else if (i < num_axes) {
+                idx = starts[i] + idx * (steps ? steps[i] : 1);
+            }
+            input_flat_index += idx * input_stride;
+            output_flat_index += output_indices[i] * output_stride;
+            input_stride *= input->shape[i];
+            output_stride *= output_shape[i];
         }
 
         output->data[output_flat_index] = input->data[input_flat_index];
 
-        // Update output indices
-        for (int j = rank - 1; j >= 0; j--) {
-            output_indices[j]++;
-            if (output_indices[j] < output_shape[j]) {
+        int j;
+        for (j = rank - 1; j >= 0; j--) {
+            if (++output_indices[j] < output_shape[j])
                 break;
-            }
             output_indices[j] = 0;
         }
+        if (j < 0)
+            break;
     }
 
     return output;
@@ -2522,6 +2544,7 @@ mt_model *mt_model_load_from_mem(unsigned char *model_bytes, size_t len) {
             mt_reader_read(&layer->data.conv_2d.stride, sizeof(int), 1, &mp);
             mt_reader_read(&layer->data.conv_2d.auto_pad, sizeof(int), 1, &mp);
             mt_reader_read(&layer->data.conv_2d.pads, sizeof(int), 4, &mp);
+            mt_reader_read(&layer->data.conv_2d.dilations, sizeof(int), 2, &mp);
             mt_reader_read(&layer->data.conv_2d.group, sizeof(int), 1, &mp);
             int w_idx                = layer->inputs[1];
             int b_idx                = layer->inputs[2];
@@ -2829,7 +2852,6 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         res = mt_convolve_2d(input, w, b, l->data.conv_2d.stride,
                              l->data.conv_2d.pads, l->data.conv_2d.dilations,
                              l->data.conv_2d.group);
-        mt_tensor_debug_info(res);
         mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
@@ -2855,6 +2877,12 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         DEBUG_LOG("drop-out has no effect");
         mt_tensor *res =
             mt_tensor_alloc_values(input->shape, input->ndim, input->data);
+        mt__model_set_tensor(model, l->outputs[0], res);
+        break;
+    }
+    case MT_LAYER_EXP: {
+        mt_tensor *input = model->tensors[l->inputs[0]];
+        mt_tensor *res   = mt_exp(input);
         mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
@@ -2994,16 +3022,29 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         break;
     }
     case MT_LAYER_RESHAPE: {
-        mt_tensor *input1 = model->tensors[l->inputs[0]];
+        mt_tensor *input = model->tensors[l->inputs[0]];
 
         mt_tensor *shape_tensor = model->tensors[l->inputs[1]];
         int        new_ndim     = mt_tensor_count_element(shape_tensor);
         int        new_shape[MAX_TENSOR_NDIM] = {0};
 
         // Convert shape float tensor into int arr
-        for (int i = 0; i < new_ndim; ++i)
-            new_shape[i] = (int)shape_tensor->data[i];
-        res = mt_tensor_alloc_values(input1->shape, input1->ndim, input1->data);
+        size_t remaining_len = mt_tensor_count_element(input);
+        int    negative_dim  = -1; // this will change to > 0 when -1 is found
+                                   // in the new index
+        for (int i = 0; i < new_ndim; ++i) {
+            if (shape_tensor->data[i] == -1) {
+                MT_ASSERT(negative_dim == -1, "multiple negative shape found");
+                negative_dim = i;
+            } else {
+                new_shape[i] = (int)shape_tensor->data[i];
+                remaining_len /= new_shape[i];
+            }
+        }
+        if (negative_dim > -1)
+            new_shape[negative_dim] = remaining_len;
+
+        res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
         mt_tensor_reshape_inplace(res, new_shape, new_ndim);
 
         mt__model_set_tensor(model, l->outputs[0], res);
@@ -3082,11 +3123,42 @@ void mt__layer_forward(mt_layer *l, mt_model *model) {
         break;
     }
     case MT_LAYER_SLICE: {
-        mt_tensor *input = model->tensors[l->inputs[0]];
-        // res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
-        // mt_sigmoid_inplace(res);
+        mt_tensor *input    = model->tensors[l->inputs[0]];
+        mt_tensor *starts_t = model->tensors[l->inputs[1]];
+        mt_tensor *ends_t   = model->tensors[l->inputs[2]];
+        int        num_axes = mt_tensor_count_element(starts_t);
+
+        mt_tensor *axes_t =
+            l->input_count > 3 ? model->tensors[l->inputs[3]] : NULL;
+        mt_tensor *steps_t =
+            l->input_count > 4 ? model->tensors[l->inputs[4]] : NULL;
+
+        // put tensor values into int arrays
+        int starts[num_axes], ends[num_axes], axes[num_axes], steps[num_axes];
+        for (int i = 0; i < num_axes; ++i) {
+            starts[i] = starts_t->data[i];
+            ends[i]   = ends_t->data[i];
+            axes[i]   = axes_t == NULL ? i : axes_t->data[i];
+            steps[i]  = steps_t == NULL ? 1 : steps_t->data[i];
+        }
+
+        res = mt_tensor_slice(input, starts, ends, axes, steps, num_axes);
+        printf("SLICE INFO:\n");
+        printf("INPUT:\n");
+        mt_tensor_print(input);
+        printf("STARTS:\n");
+        mt_tensor_print(starts_t);
+        printf("ENDS:\n");
+        mt_tensor_print(ends_t);
+        printf("AXES:\n");
+        mt_tensor_print(axes_t);
+        printf("STEPS:\n");
+        mt_tensor_print(steps_t);
+        printf("RESULT:\n");
+        mt_tensor_print(res);
+        printf("INT MAX: %ld\n", LONG_MAX);
+        printf("\n");
         mt__model_set_tensor(model, l->outputs[0], res);
-        exit(1);
         break;
     }
     case MT_LAYER_SOFTMAX: {
