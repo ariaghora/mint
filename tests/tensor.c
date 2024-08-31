@@ -1383,35 +1383,74 @@ void test_reduce_mean(Stats *stats) {
 
 void test_softmax(Stats *stats) {
     MT_SECTION_TITLE("Softmax");
+    // Test case 1: 2D tensor (unchanged from previous test)
+    {
+        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(2, 3), 2,
+                                                  MT_ARR_FLOAT(1, 2, 3,
+                                                               4, 5, 6));
 
-    mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(2, 3), 2,
-                                              MT_ARR_FLOAT(1, 2, 3,
-                                                           4, 5, 6));
+        mt_tensor *output = mt_softmax(input, 1);
 
-    mt_tensor *output = mt_softmax(input, 1);
+        MT_ASSERT_TEST("2D softmax shape", mt_arr_same(output->shape, MT_ARR_INT(2, 3), 2, SZ_I));
 
-    MT_ASSERT_TEST("softmax shape", mt_arr_same(output->shape, MT_ARR_INT(2, 3), 2, SZ_I));
+        // Calculate expected softmax values
+        mt_float expected[6];
+        mt_float sum1 = expf(1) + expf(2) + expf(3);
+        mt_float sum2 = expf(4) + expf(5) + expf(6);
+        expected[0] = expf(1) / sum1;
+        expected[1] = expf(2) / sum1;
+        expected[2] = expf(3) / sum1;
+        expected[3] = expf(4) / sum2;
+        expected[4] = expf(5) / sum2;
+        expected[5] = expf(6) / sum2;
 
-    // Calculate expected softmax values
-    mt_float expected[6];
-    mt_float sum1 = expf(1) + expf(2) + expf(3);
-    mt_float sum2 = expf(4) + expf(5) + expf(6);
-    expected[0] = expf(1) / sum1;
-    expected[1] = expf(2) / sum1;
-    expected[2] = expf(3) / sum1;
-    expected[3] = expf(4) / sum2;
-    expected[4] = expf(5) / sum2;
-    expected[5] = expf(6) / sum2;
+        // Check if the output is close to the expected values
+        for (int i = 0; i < 6; i++) {
+            MT_ASSERT_TEST_F("2D softmax data", fabs(output->data[i] - expected[i]) < 1e-6,
+                             "Expected %f, got %f at index %d", expected[i], output->data[i], i);
+        }
 
-    // Check if the output is close to the expected values
-    for (int i = 0; i < 6; i++) {
-        MT_ASSERT_TEST_F("softmax data", fabs(output->data[i] - expected[i]) < 1e-6,
-                         "Expected %f, got %f at index %d", expected[i], output->data[i], i);
+        mt_tensor_free(input);
+        mt_tensor_free(output);
     }
 
-    mt_tensor_free(input);
-    mt_tensor_free(output);
+    // Test case 2: 3D tensor, softmax on axis 2
+    {
+        mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(2, 3, 4), 3,
+                                                  MT_ARR_FLOAT(0.1, 0.2, 0.3, 0.4,
+                                                               1.1, 1.2, 1.3, 1.4,
+                                                               2.1, 2.2, 2.3, 2.4,
+                                                               3.1, 3.2, 3.3, 3.4,
+                                                               4.1, 4.2, 4.3, 4.4,
+                                                               5.1, 5.2, 5.3, 5.4));
+
+        mt_tensor *output = mt_softmax(input, 2);
+
+        MT_ASSERT_TEST("3D softmax shape", mt_arr_same(output->shape, MT_ARR_INT(2, 3, 4), 3, SZ_I));
+
+        // Calculate expected softmax values
+        mt_float expected[24];
+        for (int i = 0; i < 6; i++) {
+            mt_float sum = 0;
+            for (int j = 0; j < 4; j++) {
+                sum += expf(input->data[i * 4 + j]);
+            }
+            for (int j = 0; j < 4; j++) {
+                expected[i * 4 + j] = expf(input->data[i * 4 + j]) / sum;
+            }
+        }
+
+        // Check if the output is close to the expected values
+        for (int i = 0; i < 24; i++) {
+            MT_ASSERT_TEST_F("3D softmax data", fabs(output->data[i] - expected[i]) < 1e-6,
+                             "Expected %f, got %f at index %d", expected[i], output->data[i], i);
+        }
+
+        mt_tensor_free(input);
+        mt_tensor_free(output);
+    }
 }
+
 int main() {
     Stats s = {0};
 

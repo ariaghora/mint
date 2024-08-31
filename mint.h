@@ -3271,26 +3271,13 @@ MTDEF void mt__layer_forward(mt_layer *l, mt_model *model) {
         }
 
         res = mt_tensor_slice(input, starts, ends, axes, steps, num_axes);
-        printf("SLICE INFO:\n");
-        printf("INPUT:\n");
-        mt_tensor_print(input);
-        printf("STARTS:\n");
-        mt_tensor_print(starts_t);
-        printf("ENDS:\n");
-        mt_tensor_print(ends_t);
-        printf("AXES:\n");
-        mt_tensor_print(axes_t);
-        printf("STEPS:\n");
-        mt_tensor_print(steps_t);
-        printf("RESULT:\n");
-        mt_tensor_print(res);
-        printf("INT MAX: %ld\n", LONG_MAX);
-        printf("\n");
         mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
     case MT_LAYER_SOFTMAX: {
         mt_tensor *input = model->tensors[l->inputs[0]];
+        int        axis  = l->data.softmax.axis;
+        printf("axis: %d\n", axis);
         res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
         WARN_LOG("softmax is not implemented yet, so it is an identity "
                  "function now");
