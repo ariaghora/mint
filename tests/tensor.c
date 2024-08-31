@@ -1348,6 +1348,70 @@ void test_reduce_min(Stats *stats) {
         mt_tensor_free(output_keep);
     }
 }
+
+void test_reduce_max(Stats *stats) {
+    mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(2, 3, 2), 3,
+                                              MT_ARR_FLOAT(1, 2,
+                                                           3, 4,
+                                                           5, 6,
+                                                           7, 8,
+                                                           9, 10,
+                                                           11, 12));  
+    {
+        mt_tensor *output = mt_max(input, 1, 0);
+        MT_ASSERT_TEST("max shape", mt_arr_same(output->shape, MT_ARR_INT(2, 2), 2, SZ_I));
+        MT_ASSERT_TEST("max data", mt_arr_same(output->data, MT_ARR_FLOAT(5, 6, 11, 12), 4, SZ_F));
+        mt_tensor_free(output);
+    }
+}
+
+void test_reduce_mean(Stats *stats) {
+    mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(2, 3, 2), 3,
+                                              MT_ARR_FLOAT(1, 2,
+                                                           3, 4,
+                                                           5, 6,
+                                                           7, 8,
+                                                           9, 10,
+                                                           11, 12));  
+    {
+        mt_tensor *output = mt_mean(input, 1, 0);
+        MT_ASSERT_TEST("mean shape", mt_arr_same(output->shape, MT_ARR_INT(2, 2), 2, SZ_I));
+        MT_ASSERT_TEST("mean data", mt_arr_same(output->data, MT_ARR_FLOAT(3, 4, 9, 10), 4, SZ_F));
+        mt_tensor_free(output);
+    }
+}
+
+void test_softmax(Stats *stats) {
+    MT_SECTION_TITLE("Softmax");
+
+    mt_tensor *input = mt_tensor_alloc_values(MT_ARR_INT(2, 3), 2,
+                                              MT_ARR_FLOAT(1, 2, 3,
+                                                           4, 5, 6));
+
+    mt_tensor *output = mt_softmax(input, 1);
+
+    MT_ASSERT_TEST("softmax shape", mt_arr_same(output->shape, MT_ARR_INT(2, 3), 2, SZ_I));
+
+    // Calculate expected softmax values
+    mt_float expected[6];
+    mt_float sum1 = expf(1) + expf(2) + expf(3);
+    mt_float sum2 = expf(4) + expf(5) + expf(6);
+    expected[0] = expf(1) / sum1;
+    expected[1] = expf(2) / sum1;
+    expected[2] = expf(3) / sum1;
+    expected[3] = expf(4) / sum2;
+    expected[4] = expf(5) / sum2;
+    expected[5] = expf(6) / sum2;
+
+    // Check if the output is close to the expected values
+    for (int i = 0; i < 6; i++) {
+        MT_ASSERT_TEST_F("softmax data", fabs(output->data[i] - expected[i]) < 1e-6,
+                         "Expected %f, got %f at index %d", expected[i], output->data[i], i);
+    }
+
+    mt_tensor_free(input);
+    mt_tensor_free(output);
+}
 int main() {
     Stats s = {0};
 
@@ -1359,6 +1423,9 @@ int main() {
     test_tensor_split(&s);
     test_conv2d(&s);
     test_reduce_min(&s);
+    test_reduce_max(&s);
+    test_reduce_mean(&s);
+    test_softmax(&s);
 
     printf("FAILED: %d, PASSED: %d\n", s.failed, s.pass);
 

@@ -170,16 +170,6 @@ operation.
 extern "C" {
 #endif
 
-// The tensor values data type
-#ifndef mt_float
-#define mt_float float
-// Positive infinity in IEEE-754 format for 32-bit floating number
-#define mt_float_max (*((float *)&(uint32_t){0x7F800000}))
-#endif
-
-#ifndef MTDEF
-#define MTDEF static inline
-#endif
 /***************************************************************************
   MINT APIs                                                            MT005
  **************************************************************************/
@@ -187,6 +177,16 @@ extern "C" {
 /*
  * Tensor operation API
  */
+
+// The tensor values data type
+#ifndef mt_float
+#define mt_float     float
+#define mt_float_max 3.402823466e+38F
+#endif
+
+#ifndef MTDEF
+#define MTDEF static inline
+#endif
 
 typedef struct mt_tensor mt_tensor;
 
@@ -243,19 +243,27 @@ MTDEF mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b);
 // Max-pooling
 MTDEF mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride,
                                int *pads);
+// Find maximum values along dimensions
+MTDEF mt_tensor *mt_max(mt_tensor *input, int axis, int keep_dims);
+// Find mean values along dimensions
+MTDEF mt_tensor *mt_mean(mt_tensor *input, int axis, int keep_dims);
 // Find minimum values along dimensions
 MTDEF mt_tensor *mt_min(mt_tensor *input, int axis, int keep_dims);
 // Element-wise multiplication
 MTDEF mt_tensor *mt_mul(mt_tensor *a, mt_tensor *b);
 // Generic reduce function
 MTDEF mt_tensor *mt_reduce(mt_tensor *t, int axis, mt_reduce_func reduce_op,
-                           int keep_dims);
+                           mt_float init_val, int keep_dims);
 // Relu activation function, in-place version.
 MTDEF void       mt_relu_inplace(mt_tensor *t);
 // Sigmoid activation function, in-place version.
 MTDEF void       mt_sigmoid_inplace(mt_tensor *t);
+// softmax
+MTDEF mt_tensor *mt_softmax(mt_tensor *input, int axis);
 // Element-wise subtraction
 MTDEF mt_tensor *mt_sub(mt_tensor *a, mt_tensor *b);
+// Find sum values along dimensions
+MTDEF mt_tensor *mt_sum(mt_tensor *input, int axis, int keep_dims);
 
 /*
  * Tensor memory management API
@@ -378,6 +386,7 @@ MTDEF void              mt_layer_debug_info(mt_layer *l);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifdef MT_USE_OPEN_MP
 #include <omp.h>
@@ -881,7 +890,7 @@ MTDEF mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
 
 MTDEF mt_tensor *mt__unop(mt_tensor *t, mt_float f(mt_float)) {
     mt_tensor *output = mt_tensor_alloc(t->shape, t->ndim);
-    for (int i = 0; i > mt_tensor_count_element(t); ++i) {
+    for (int i = 0; i < mt_tensor_count_element(t); ++i) {
         output->data[i] = f(t->data[i]);
     }
     return output;
@@ -1249,13 +1258,13 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
     return output;
 }
 
-static mt_float mt__s_div(mt_float a, mt_float b) { return a / b; }
-mt_tensor      *mt_div(mt_tensor *a, mt_tensor *b) {
+MTDEF mt_float   mt__s_div(mt_float a, mt_float b) { return a / b; }
+MTDEF mt_tensor *mt_div(mt_tensor *a, mt_tensor *b) {
     return mt__binop(a, b, mt__s_div);
 }
 
-static mt_float mt__s_exp(mt_float x) { return exp(x); }
-mt_tensor      *mt_exp(mt_tensor *t) { return mt__unop(t, mt__s_exp); }
+MTDEF mt_float   mt__s_exp(mt_float x) { return exp(x); }
+MTDEF mt_tensor *mt_exp(mt_tensor *t) { return mt__unop(t, mt__s_exp); }
 
 mt_tensor *mt_global_avg_pool_2d(mt_tensor *x) {
     MT_ASSERT(x->ndim == 4, "Input tensor must be 4-dimensional (NCHW format)");
@@ -1833,11 +1842,30 @@ mt_tensor *mt_tensor_pad(mt_tensor *t, int *pads, mt_pad_mode mode,
     }
 }
 
+MTDEF mt_float mt__reduce_max_fn(mt_float a, mt_float b) {
+    return (a > b) ? a : b;
+}
+MTDEF mt_tensor *mt_max(mt_tensor *input, int axis, int keep_dims) {
+    return mt_reduce(input, axis, mt__reduce_max_fn, -mt_float_max, keep_dims);
+}
+
+mt_tensor *mt_mean(mt_tensor *input, int axis, int keep_dims) {
+    mt_tensor *sum       = mt_sum(input, axis, keep_dims);
+    int        axis_size = input->shape[axis];
+
+    int size = mt_tensor_count_element(sum);
+    for (int i = 0; i < size; i++) {
+        sum->data[i] /= axis_size;
+    }
+
+    return sum;
+}
+
 MTDEF mt_float mt__reduce_min_fn(mt_float a, mt_float b) {
     return (a < b) ? a : b;
 }
 MTDEF mt_tensor *mt_min(mt_tensor *input, int axis, int keep_dims) {
-    return mt_reduce(input, axis, mt__reduce_min_fn, keep_dims);
+    return mt_reduce(input, axis, mt__reduce_min_fn, mt_float_max, keep_dims);
 }
 
 MTDEF mt_float mt__s_mul(mt_float a, mt_float b) { return a * b; }
@@ -2065,13 +2093,12 @@ mt_tensor *mt_tensor_permute_dims(mt_tensor *t, int *dims) {
 }
 
 MTDEF mt_tensor *mt_reduce(mt_tensor *input, int axis, mt_reduce_func reduce_op,
-                           int keep_dims) {
+                           mt_float init_val, int keep_dims) {
     MT_ASSERT(input->ndim > 0, "Input tensor must have at least one dimension");
     MT_ASSERT(axis >= -input->ndim && axis < input->ndim, "Invalid axis");
 
-    if (axis < 0) {
+    if (axis < 0)
         axis += input->ndim;
-    }
 
     int output_shape[MAX_TENSOR_NDIM];
     int output_ndim = keep_dims ? input->ndim : input->ndim - 1;
@@ -2087,24 +2114,20 @@ MTDEF mt_tensor *mt_reduce(mt_tensor *input, int axis, mt_reduce_func reduce_op,
     mt_tensor *output = mt_tensor_alloc(output_shape, output_ndim);
 
     int axis_size  = input->shape[axis];
-    int outer_size = 1;
-    int inner_size = 1;
+    int outer_size = 1, inner_size = 1;
 
-    for (int i = 0; i < axis; i++) {
+    for (int i = 0; i < axis; i++)
         outer_size *= input->shape[i];
-    }
-    for (int i = axis + 1; i < input->ndim; i++) {
+    for (int i = axis + 1; i < input->ndim; i++)
         inner_size *= input->shape[i];
-    }
 
 #pragma omp parallel for collapse(2)
     for (int i = 0; i < outer_size; i++) {
         for (int j = 0; j < inner_size; j++) {
-            mt_float result = input->data[i * axis_size * inner_size + j];
-            for (int k = 1; k < axis_size; k++) {
+            mt_float result = init_val;
+            for (int k = 0; k < axis_size; k++) {
                 mt_float current =
-                    input
-                        ->data[i * axis_size * inner_size + k * inner_size + j];
+                    input->data[(i * axis_size + k) * inner_size + j];
                 result = reduce_op(result, current);
             }
             output->data[i * inner_size + j] = result;
@@ -2134,9 +2157,37 @@ void mt_sigmoid_inplace(mt_tensor *t) {
     }
 }
 
+MTDEF mt_tensor *mt_softmax(mt_tensor *input, int axis) {
+    MT_ASSERT(input->ndim > 0, "Input tensor must have at least one dimension");
+    MT_ASSERT(axis >= -input->ndim && axis < input->ndim, "Invalid axis");
+
+    if (axis < 0)
+        axis += input->ndim;
+
+    mt_tensor *max_vals = mt_max(input, axis, 1);
+    mt_tensor *shifted  = mt_sub(input, max_vals);
+    mt_tensor_free(max_vals);
+
+    mt_tensor *exp_vals = mt_exp(shifted);
+    mt_tensor_free(shifted);
+
+    mt_tensor *sum_exp        = mt_sum(exp_vals, axis, 1);
+    mt_tensor *softmax_output = mt_div(exp_vals, sum_exp);
+
+    mt_tensor_free(exp_vals);
+    mt_tensor_free(sum_exp);
+
+    return softmax_output;
+}
+
 MTDEF mt_float mt__s_sub(mt_float a, mt_float b) { return a - b; }
 mt_tensor     *mt_sub(mt_tensor *a, mt_tensor *b) {
     return mt__binop(a, b, mt__s_sub);
+}
+
+MTDEF mt_float   mt_reduce_sum_fn(mt_float a, mt_float b) { return a + b; }
+MTDEF mt_tensor *mt_sum(mt_tensor *input, int axis, int keep_dims) {
+    return mt_reduce(input, axis, mt_reduce_sum_fn, 0, keep_dims);
 }
 
 // Helper function to handle negative indices and clamping
@@ -3293,7 +3344,6 @@ mt_tensor *mt_model_get_output(mt_model *model, const char *name) {
     return t_copy;
 }
 
-#include <time.h>
 void mt_model_run(mt_model *model, void (*callback)(int, int, void *),
                   void *data) {
     int  sorted_ids[MAX_LAYER_COUNT] = {0};
