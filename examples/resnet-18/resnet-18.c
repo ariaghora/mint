@@ -11,7 +11,7 @@
 /*
 uncomment one of two lines below as needed
 */
-// #define MT_USE_BLAS
+// #define MT_USE_BLAS  // make CFLAGS+="-lblas"
 // #define MT_USE_NEON
 
 #include "../../mint.h"
@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
-    mt_model  *model = mt_model_load(argv[1], 1);
+    mt_model  *model = mt_model_load(argv[1]);
     mt_tensor *image = mt_tensor_load_image(argv[2]);
 
     float *mean = MT_ARR_FLOAT(0.485, 0.456, 0.406);
@@ -39,7 +39,7 @@ int main(int argc, char **argv) {
     mt_tensor_unsqueeze_inplace(image, 0);
 
     mt_model_set_input(model, "input", image);
-    mt_model_run(model);
+    mt_model_run(model, NULL, NULL);
 
     mt_tensor *output = mt_model_get_output(model, "output");
 

@@ -15,7 +15,7 @@ int main() {
     fread(buffer, filelen, 1, fileptr);
 
     // Load model from the memory
-    mt_model *model = mt_model_load_from_mem(buffer, filelen, 1);
+    mt_model *model = mt_model_load_from_mem(buffer, filelen);
 
     // Do something with the model here
     // ...
