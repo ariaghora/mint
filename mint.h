@@ -818,6 +818,20 @@ MTDEF mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
         return result;
     }
 
+    /* check if tensor-scalar specialization is needed */
+    int b_numel = mt_tensor_count_element(b);
+    if (b_numel == 1) {
+        mt_tensor *result  = mt_tensor_alloc(a->shape, a->ndim);
+        int        a_numel = mt_tensor_count_element(a);
+#pragma omp parallel for
+        for (int i = 0; i < a_numel; ++i) {
+            result->data[i] = f(a->data[i], b->data[0]);
+        }
+
+        /* try to return early */
+        return result;
+    }
+
     /*
      * Otherwise, try broadcasting
      */
