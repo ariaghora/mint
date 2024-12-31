@@ -1,4 +1,4 @@
-> This library is super new, and I cannot guarantee long-term maintenance commitment. If you need something faster and highly optimized, you should use [ggml](https://github.com/ggerganov/ggml) or a similar alternative.
+> This library may not be feature-complete, but since it can already run several deep learning models, I believe it is sufficient and I consider it completed.
 
 ---
 
