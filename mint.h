@@ -361,9 +361,9 @@ MTDEF mt_model  *mt_model_load(const char *filename);
 MTDEF void       mt_model_free(mt_model *model);
 MTDEF mt_tensor *mt_model_get_output(mt_model *model, const char *name);
 MTDEF void       mt_model_run(mt_model *model,
-                              void      (*callbak)(int layer_index, int layer_count,
+                              void (*callbak)(int layer_index, int layer_count,
                                         void *data),
-                              void     *data);
+                              void *data);
 MTDEF void mt_model_set_input(mt_model *model, const char *name, mt_tensor *t);
 
 typedef struct mt_layer mt_layer;
@@ -1226,6 +1226,85 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
     int        output_shape[4] = {batch_size, C_out, H_out, W_out};
     mt_tensor *output          = mt_tensor_alloc(output_shape, 4);
 
+#ifdef MT_USE_IM2COL_CONV
+    if (group == 1) {
+        // Use the original optimized path for non-grouped convolutions
+        for (int n = 0; n < batch_size; n++) {
+            mt_tensor temp_input = {.data  = x->data + n * C_in * H_in * W_in,
+                                    .shape = {C_in, H_in, W_in},
+                                    .ndim  = 3};
+
+            mt_tensor *temp_output = mt_convolve_2d_single(
+                &temp_input, w, b, stride, pads, dilations);
+
+            // Copy to output
+            memcpy(output->data + n * C_out * H_out * W_out, temp_output->data,
+                   C_out * H_out * W_out * sizeof(mt_float));
+
+            mt_tensor_free(temp_output);
+        }
+    } else {
+        // Handle grouped convolution with im2col
+        int C_in_per_group  = C_in / group;
+        int C_out_per_group = C_out / group;
+
+        // Create im2col matrix for entire input
+        int im2col_rows = C_in_per_group * K_h * K_w;
+        int im2col_cols = H_out * W_out;
+
+        for (int n = 0; n < batch_size; n++) {
+            for (int g = 0; g < group; g++) {
+                // Create im2col for this group
+                mt_tensor *im2col =
+                    mt_tensor_alloc(MT_ARR_INT(im2col_rows, im2col_cols), 2);
+
+                // Apply im2col to the group's input channels
+                mt__im2col(x->data + n * C_in * H_in * W_in +
+                               g * C_in_per_group * H_in * W_in,
+                           C_in_per_group, H_in, W_in, K_h, K_w, stride,
+                           pad_h_begin, pad_w_begin, H_out, W_out, dilation_h,
+                           dilation_w, im2col->data);
+
+                // Reshape weights for this group
+                mt_tensor *reshaped_w = mt_tensor_alloc(
+                    MT_ARR_INT(C_out_per_group, C_in_per_group * K_h * K_w), 2);
+                memcpy(reshaped_w->data,
+                       w->data +
+                           g * C_out_per_group * C_in_per_group * K_h * K_w,
+                       C_out_per_group * C_in_per_group * K_h * K_w *
+                           sizeof(mt_float));
+
+                // Perform matrix multiplication
+                mt_tensor *output_2d = mt_matmul(reshaped_w, im2col);
+
+// Add bias and copy to output
+#pragma omp parallel for collapse(3)
+                for (int c = 0; c < C_out_per_group; c++) {
+                    for (int h = 0; h < H_out; h++) {
+                        for (int w = 0; w < W_out; w++) {
+                            int out_idx =
+                                ((n * C_out + (g * C_out_per_group + c)) *
+                                     H_out +
+                                 h) *
+                                    W_out +
+                                w;
+                            int temp_idx = c * H_out * W_out + h * W_out + w;
+                            output->data[out_idx] =
+                                output_2d->data[temp_idx] +
+                                b->data[g * C_out_per_group + c];
+                        }
+                    }
+                }
+
+                // Free temporary tensors
+                mt_tensor_free(im2col);
+                mt_tensor_free(reshaped_w);
+                mt_tensor_free(output_2d);
+            }
+        }
+    }
+#else
+    // Original non-im2col implementation
     // Process each item in the batch
     for (int n = 0; n < batch_size; n++) {
         // Process each group
@@ -1268,6 +1347,7 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
             mt_tensor_free(temp_output);
         }
     }
+#endif
 
     return output;
 }
@@ -2224,6 +2304,16 @@ MTDEF mt_tensor *mt_tensor_slice(mt_tensor *input, int *starts, int *ends,
     int output_shape[MAX_TENSOR_NDIM];
     memcpy(output_shape, input->shape, rank * sizeof(int));
 
+    // Store actual start values for each axis after processing
+    int actual_starts[MAX_TENSOR_NDIM] = {0};
+    int actual_steps[MAX_TENSOR_NDIM]  = {1};
+
+    // Initialize with defaults (full range for axes not specified)
+    for (int i = 0; i < rank; i++) {
+        actual_starts[i] = 0;
+        actual_steps[i]  = 1;
+    }
+
     for (int i = 0; i < num_axes; i++) {
         int axis = (axes != NULL) ? axes[i] : i;
         if (axis < 0)
@@ -2234,60 +2324,49 @@ MTDEF mt_tensor *mt_tensor_slice(mt_tensor *input, int *starts, int *ends,
         int start = starts[i], end = ends[i], step = steps ? steps[i] : 1;
         MT_ASSERT(step != 0, "Step cannot be zero");
 
-        // Clamp start and end to valid range, allowing negative indices
-        if (start >= dim_size)
-            start = step > 0 ? dim_size : dim_size - 1;
-        if (start < -dim_size)
-            start = step > 0 ? 0 : -1;
-        if (end >= dim_size)
-            end = dim_size;
-        if (end < -dim_size - 1)
-            end = -1;
-
-        // Convert negative indices to positive
+        // Handle negative indices
         if (start < 0)
             start += dim_size;
         if (end < 0)
             end += dim_size;
 
-        // Ensure start and end are within bounds
-        start = step > 0 ? MAX(0, start) : MIN(dim_size - 1, start);
-        end   = step > 0 ? MIN(dim_size, end) : MAX(-1, end);
+        // Clamp to valid range
+        start = MAX(0, MIN(start, dim_size - 1));
+        end   = MAX(0, MIN(end, dim_size));
 
-        int slice_length   = step > 0 ? (end - start + step - 1) / step
-                                      : (start - end - step - 1) / (-step);
+        int slice_length   = (end - start + step - 1) / step;
         output_shape[axis] = MAX(0, slice_length);
+
+        actual_starts[axis] = start;
+        actual_steps[axis]  = step;
     }
 
     mt_tensor *output = mt_tensor_alloc(output_shape, rank);
 
-    int input_indices[MAX_TENSOR_NDIM]  = {0};
+    // Calculate strides for input tensor
+    int input_strides[MAX_TENSOR_NDIM];
+    input_strides[rank - 1] = 1;
+    for (int i = rank - 2; i >= 0; i--) {
+        input_strides[i] = input_strides[i + 1] * input->shape[i + 1];
+    }
+
+    // Copy data
     int output_indices[MAX_TENSOR_NDIM] = {0};
+    int output_flat_idx                 = 0;
 
     while (1) {
-        int input_flat_index = 0, output_flat_index = 0;
-        int input_stride = 1, output_stride = 1;
-
-        for (int i = rank - 1; i >= 0; i--) {
-            int idx = output_indices[i];
-            if (axes) {
-                for (int j = 0; j < num_axes; j++) {
-                    if (axes[j] == i) {
-                        idx = starts[j] + idx * (steps ? steps[j] : 1);
-                        break;
-                    }
-                }
-            } else if (i < num_axes) {
-                idx = starts[i] + idx * (steps ? steps[i] : 1);
-            }
-            input_flat_index += idx * input_stride;
-            output_flat_index += output_indices[i] * output_stride;
-            input_stride *= input->shape[i];
-            output_stride *= output_shape[i];
+        // Calculate input index from output index
+        int input_flat_idx = 0;
+        for (int i = 0; i < rank; i++) {
+            int input_idx =
+                actual_starts[i] + output_indices[i] * actual_steps[i];
+            input_flat_idx += input_idx * input_strides[i];
         }
 
-        output->data[output_flat_index] = input->data[input_flat_index];
+        output->data[output_flat_idx] = input->data[input_flat_idx];
+        output_flat_idx++;
 
+        // Update output indices
         int j;
         for (j = rank - 1; j >= 0; j--) {
             if (++output_indices[j] < output_shape[j])
@@ -3343,7 +3422,7 @@ mt_tensor *mt_model_get_output(mt_model *model, const char *name) {
 }
 
 void mt_model_run(mt_model *model, void (*callback)(int, int, void *),
-                  void *data) {
+                  void     *data) {
     int  sorted_ids[MAX_LAYER_COUNT] = {0};
     int *sorted_len_ptr = (int *)calloc(1, sizeof(*sorted_len_ptr));
 
