@@ -419,6 +419,9 @@ MTDEF void              mt_layer_debug_info(mt_layer *l);
 #define MT_FREE(sz)   free(sz)
 #endif
 
+#define MAX(a, b) (a > b ? a : b)
+#define MIN(a, b) (a < b ? a : b)
+
 typedef struct mt_tensor {
     mt_float *data;
 
@@ -2296,8 +2299,6 @@ MTDEF int mt__adjust_index(int index, int dim, int step) {
     }
 }
 
-#define MAX(a, b) (a > b ? a : b)
-#define MIN(a, b) (a < b ? a : b)
 MTDEF mt_tensor *mt_tensor_slice(mt_tensor *input, int *starts, int *ends,
                                  int *axes, int *steps, int num_axes) {
     int rank = input->ndim;
