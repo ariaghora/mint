@@ -1732,8 +1732,8 @@ mt_tensor *mt_image_resize(mt_tensor *img, int target_height,
     mt_tensor *resized =
         mt_tensor_alloc(MT_ARR_INT(channels, target_height, target_width), 3);
 
-    float height_scale = (float)src_height / target_height;
-    float width_scale  = (float)src_width / target_width;
+    float height_scale = (float)(src_height - 1) / (target_height - 1);
+    float width_scale  = (float)(src_width - 1) / (target_width - 1);
 
     // Pre-compute source y coordinates and their weights
     float *src_y  = (float *)MT_MALLOC(target_height * sizeof(float));
@@ -1757,8 +1757,6 @@ mt_tensor *mt_image_resize(mt_tensor *img, int target_height,
         dx[x]     = src_x[x] - src_x0[x];
     }
 
-// Main resizing loop
-#pragma omp parallel for
     for (int c = 0; c < channels; c++) {
         mt_float *src_channel = img->data + c * src_height * src_width;
         mt_float *dst_channel =
@@ -3168,6 +3166,68 @@ mt_tensor *mt_tensor_load_image(char *filename) {
 
     stbi_image_free(data);
     return t;
+}
+
+#endif
+
+#ifdef MT_USE_STB_IMAGE_WRITE
+MTDEF int mt_tensor_save_image(mt_tensor *t, char *filename, int quality) {
+    MT_ASSERT(t->ndim == 3, "Tensor must be 3-dimensional (CHW format)");
+
+    int c = t->shape[0];
+    int h = t->shape[1];
+    int w = t->shape[2];
+
+    MT_ASSERT(c == 1 || c == 3 || c == 4, "Image must have 1, 3 or 4 channels");
+
+    // Allocate buffer for HWC image data (0-255 range)
+    unsigned char *data = (unsigned char *)MT_MALLOC(w * h * c);
+    if (data == NULL) {
+        ERROR_F("Failed to allocate memory for image data to save to %s",
+                filename);
+        return 0;
+    }
+
+    // Convert from CHW to HWC, and from 0-1 to 0-255 range
+    for (int row = 0; row < h; row++) {
+        for (int col = 0; col < w; col++) {
+            for (int chan = 0; chan < c; chan++) {
+                float pixel_value = t->data[chan * h * w + row * w + col];
+                // Clamp values to 0-1 range
+                pixel_value =
+                    pixel_value < 0 ? 0 : (pixel_value > 1 ? 1 : pixel_value);
+                // Scale to 0-255 and convert to unsigned char
+                data[(row * w + col) * c + chan] =
+                    (unsigned char)(pixel_value * 255.0f + 0.5f);
+            }
+        }
+    }
+
+    // Save image based on filename extension
+    int         success = 0;
+    const char *ext     = strrchr(filename, '.');
+    if (ext) {
+        if (strcmp(ext, ".png") == 0) {
+            success = stbi_write_png(filename, w, h, c, data, w * c);
+        } else if (strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0) {
+            success = stbi_write_jpg(filename, w, h, c, data, quality);
+        } else if (strcmp(ext, ".bmp") == 0) {
+            success = stbi_write_bmp(filename, w, h, c, data);
+        } else {
+            ERROR_F("Unsupported image format: %s", ext);
+        }
+    } else {
+        // Default to PNG if no extension
+        success = stbi_write_png(filename, w, h, c, data, w * c);
+    }
+
+    MT_FREE(data);
+
+    if (!success) {
+        ERROR_F("Failed to save image to %s", filename);
+    }
+
+    return success;
 }
 #endif
 

@@ -1,11 +1,14 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "../../vendors/stb_image.h"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "../../vendors/stb_image_write.h"
 
 // Comment line below to enable logging and assertion
 #define NDEBUG
 
 #define MT_USE_IM2COL_CONV
 #define MT_USE_STB_IMAGE
+#define MT_USE_STB_IMAGE_WRITE
 #define MT_IMPLEMENTATION
 
 /*
@@ -30,16 +33,17 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
-    mt_model  *model = mt_model_load(argv[1]);
-    mt_tensor *image = mt_tensor_load_image(argv[2]);
+    mt_model  *model         = mt_model_load(argv[1]);
+    mt_tensor *image         = mt_tensor_load_image(argv[2]);
+    mt_tensor *image_resized = mt_image_resize(image, 224, 224);
 
     float *mean = MT_ARR_FLOAT(0.485, 0.456, 0.406);
     float *std  = MT_ARR_FLOAT(0.229, 0.224, 0.225);
-    mt_image_standardize(image, mean, std);
+    mt_image_standardize(image_resized, mean, std);
 
-    mt_tensor_unsqueeze_inplace(image, 0);
+    mt_tensor_unsqueeze_inplace(image_resized, 0);
 
-    mt_model_set_input(model, "input", image);
+    mt_model_set_input(model, "input", image_resized);
     mt_model_run(model, NULL, NULL);
 
     mt_tensor *output = mt_model_get_output(model, "output");
@@ -55,6 +59,7 @@ int main(int argc, char **argv) {
     printf("class label: %s\n", class_labels[arg_max]);
 
     mt_tensor_free(output);
+    mt_tensor_free(image_resized);
     mt_tensor_free(image);
     mt_model_free(model);
     return 0;
