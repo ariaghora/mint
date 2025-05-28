@@ -406,7 +406,7 @@ void test_tensor_pad(Stats *stats) {
         mt_tensor *input = mt_tensor_alloc_values(
             MT_ARR_INT(3, 3), 2, MT_ARR_FLOAT(1, 2, 3, 4, 5, 6, 7, 8, 9));
         int        pads[] = {1, 1, 1, 1};
-        mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT, 0);
+        mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT);
         // Verify shape
         MT_ASSERT_TEST("shape",
                        mt_arr_same(output->shape, MT_ARR_INT(5, 5), 2, SZ_I));
@@ -424,7 +424,7 @@ void test_tensor_pad(Stats *stats) {
     mt_tensor *a =
         mt_tensor_alloc_values(MT_ARR_INT(5), 1, MT_ARR_FLOAT(1, 2, 3, 4, 5));
     int        pads_1d[] = {2, 2};
-    mt_tensor *res_1d    = mt_tensor_pad(a, pads_1d, MT_PAD_REFLECT, 0);
+    mt_tensor *res_1d    = mt_tensor_pad(a, pads_1d, MT_PAD_REFLECT);
     MT_ASSERT_TEST("1D shape",
                    mt_arr_same(res_1d->shape, MT_ARR_INT(9), 1, SZ_I));
     MT_ASSERT_TEST("1D data",
@@ -440,7 +440,7 @@ void test_tensor_pad(Stats *stats) {
         mt_tensor *a         = mt_tensor_alloc_values(MT_ARR_INT(5), 1,
                                                       MT_ARR_FLOAT(1, 2, 3, 4, 5));
         int        pads_1d[] = {2, 2};
-        mt_tensor *res_1d    = mt_tensor_pad(a, pads_1d, MT_PAD_REFLECT, 0);
+        mt_tensor *res_1d    = mt_tensor_pad(a, pads_1d, MT_PAD_REFLECT);
         MT_ASSERT_TEST("1D shape",
                        mt_arr_same(res_1d->shape, MT_ARR_INT(9), 1, SZ_I));
         MT_ASSERT_TEST("1D data",
@@ -457,8 +457,7 @@ void test_tensor_pad(Stats *stats) {
         mt_tensor *a              = mt_tensor_alloc_values(MT_ARR_INT(5), 1,
                                                            MT_ARR_FLOAT(1, 2, 3, 4, 5));
         int        pads_1d_asym[] = {1, 3};
-        mt_tensor *res_1d_asym =
-            mt_tensor_pad(a, pads_1d_asym, MT_PAD_REFLECT, 0);
+        mt_tensor *res_1d_asym = mt_tensor_pad(a, pads_1d_asym, MT_PAD_REFLECT);
         MT_ASSERT_TEST("1D asymmetric shape",
                        mt_arr_same(res_1d_asym->shape, MT_ARR_INT(9), 1, SZ_I));
         MT_ASSERT_TEST("1D asymmetric data",
@@ -475,7 +474,7 @@ void test_tensor_pad(Stats *stats) {
         mt_tensor *input = mt_tensor_alloc_values(
             MT_ARR_INT(3, 3), 2, MT_ARR_FLOAT(1, 2, 3, 4, 5, 6, 7, 8, 9));
         int        pads[] = {1, 1, 1, 1};
-        mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT, 0);
+        mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT);
         MT_ASSERT_TEST("2D shape",
                        mt_arr_same(output->shape, MT_ARR_INT(5, 5), 2, SZ_I));
         mt_float expected[] = {5, 4, 5, 6, 5, 2, 1, 2, 3, 2, 5, 4, 5,
@@ -497,7 +496,7 @@ void test_tensor_pad(Stats *stats) {
         printf("Padding: top=%d, left=%d, bottom=%d, right=%d\n\n", pads[0],
                pads[1], pads[2], pads[3]);
 
-        mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT, 0);
+        mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT);
 
         mt_float expected[] = {2, 1, 1, 2, 3, 3, 1, 1, 1, 2, 3, 3,
                                4, 4, 4, 5, 6, 6, 7, 7, 7, 8, 9, 9};
@@ -517,7 +516,7 @@ void test_tensor_pad(Stats *stats) {
             MT_ARR_INT(2, 2, 3), 3,
             MT_ARR_FLOAT(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12));
         int        pads[] = {0, 1, 1, 0, 1, 1};
-        mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT, 0);
+        mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT);
         MT_ASSERT_TEST("3D shape", mt_arr_same(output->shape,
                                                MT_ARR_INT(2, 4, 5), 3, SZ_I));
         mt_float expected[] = {5,  4,  5,  6,  5,  2, 1, 2, 3, 2,
@@ -538,7 +537,7 @@ void test_tensor_pad(Stats *stats) {
                                    MT_ARR_FLOAT(1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
                                                 11, 12, 13, 14, 15, 16));
         int        pads[] = {0, 0, 1, 1, 0, 0, 1, 1};
-        mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT, 0);
+        mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT);
         MT_ASSERT_TEST(
             "4D shape",
             mt_arr_same(output->shape, MT_ARR_INT(2, 2, 4, 4), 4, SZ_I));
@@ -559,7 +558,7 @@ void test_tensor_pad(Stats *stats) {
         mt_tensor *a         = mt_tensor_alloc_values(MT_ARR_INT(5), 1,
                                                       MT_ARR_FLOAT(1, 2, 3, 4, 5));
         int        pads_1d[] = {0, 0};
-        mt_tensor *res_1d    = mt_tensor_pad(a, pads_1d, MT_PAD_REFLECT, 0);
+        mt_tensor *res_1d    = mt_tensor_pad(a, pads_1d, MT_PAD_REFLECT);
         MT_ASSERT_TEST("1D no padding shape",
                        mt_arr_same(res_1d->shape, MT_ARR_INT(5), 1, SZ_I));
         MT_ASSERT_TEST(
@@ -579,7 +578,7 @@ void test_tensor_pad(Stats *stats) {
         printf("Padding: top=%d, left=%d, bottom=%d, right=%d\n\n", pads[0],
                pads[1], pads[2], pads[3]);
 
-        mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT, 0);
+        mt_tensor *output = mt_tensor_pad(input, pads, MT_PAD_REFLECT);
 
         mt_float expected[] = {4, 3, 4, 3, 4, 3, 4, 3, 2, 1, 2, 1, 2, 1, 2, 1,
                                4, 3, 4, 3, 4, 3, 4, 3, 2, 1, 2, 1, 2, 1, 2, 1,

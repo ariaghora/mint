@@ -225,15 +225,19 @@ def write_max_pool(
     shape = node["attributes"]["kernel_shape"]
     strides = node["attributes"]["strides"]
 
-    pads = node["attributes"].get("pads", [0]*4)
+    pads = node["attributes"].get("pads", [0] * 4)
     auto_pad = node["attributes"].get("auto_pad", "NOTSET")
 
     auto_pad_id = 0
     match auto_pad:
-        case "NOTSET": auto_pad_id = 0
-        case "VALID": auto_pad_id = 1
-        case "SAME_UPPER": auto_pad_id = 2
-        case "SAME_LOWER": auto_pad_id = 3
+        case "NOTSET":
+            auto_pad_id = 0
+        case "VALID":
+            auto_pad_id = 1
+        case "SAME_UPPER":
+            auto_pad_id = 2
+        case "SAME_LOWER":
+            auto_pad_id = 3
 
     assert all(v == shape[0] for v in shape)
     assert all(v == strides[0] for v in strides)
@@ -336,16 +340,19 @@ def write_conv(
     # NOTE: we refuse mutliple different stride values for now
     strides = node["attributes"]["strides"]
 
-    pads = node["attributes"].get("pads", [0]*4)
+    pads = node["attributes"].get("pads", [0] * 4)
     auto_pad = node["attributes"].get("auto_pad", "NOTSET")
 
     auto_pad_id = 0
     match auto_pad:
-        case "NOTSET": auto_pad_id = 0
-        case "VALID": auto_pad_id = 1
-        case "SAME_UPPER": auto_pad_id = 2
-        case "SAME_LOWER": auto_pad_id = 3
-
+        case "NOTSET":
+            auto_pad_id = 0
+        case "VALID":
+            auto_pad_id = 1
+        case "SAME_UPPER":
+            auto_pad_id = 2
+        case "SAME_LOWER":
+            auto_pad_id = 3
 
     assert all(v == strides[0] for v in strides)
     np.array(strides[0], dtype=np.int32).tofile(f)
@@ -408,6 +415,7 @@ def write_pow(
     write_layer_header(f, LayerKind.POW.value, node)
     print(f"wrote Pow {id}")
 
+
 def write_relu(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
@@ -448,11 +456,13 @@ def write_sigmoid(
     write_layer_header(f, LayerKind.SIGMOID.value, node)
     print(f"wrote Sigmoid {id}")
 
+
 def write_slice(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
 ):
     write_layer_header(f, LayerKind.SLICE.value, node)
     print(f"wrote Slice {id}")
+
 
 def write_softmax(
     f: BufferedWriter, id: int, node: Dict[str, Any], tensors: List[np.ndarray]
@@ -575,7 +585,9 @@ if __name__ == "__main__":
                         err.append(node["op_type"])
 
         # write initializers (data, id)
-        non_null_tensors = [(i, t) for i, t in enumerate(model["tensors"]) if t is not None]
+        non_null_tensors = [
+            (i, t) for i, t in enumerate(model["tensors"]) if t is not None
+        ]
         initializer_len = len(non_null_tensors)
         np.array(initializer_len, dtype=np.int32).tofile(f)
         for i, t in non_null_tensors:
