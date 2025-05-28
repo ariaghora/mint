@@ -1101,6 +1101,12 @@ static mt_tensor *mt__add_neon_2d(mt_tensor *a, mt_tensor *b,
 
         // Process 16 elements at a time
         for (; i <= total - 16; i += 16) {
+            // Prefetch next chunks
+            if (i + 32 < total) {
+                __builtin_prefetch(&a->data[i + 32], 0, 3);
+                __builtin_prefetch(&b->data[i + 32], 0, 3);
+            }
+
             // Load values
             float32x4_t a0 = vld1q_f32(&a->data[i]);
             float32x4_t a1 = vld1q_f32(&a->data[i + 4]);
@@ -1112,7 +1118,6 @@ static mt_tensor *mt__add_neon_2d(mt_tensor *a, mt_tensor *b,
             float32x4_t b2 = vld1q_f32(&b->data[i + 8]);
             float32x4_t b3 = vld1q_f32(&b->data[i + 12]);
 
-            // Check if we're doing addition (most common case)
             // Use vectorized addition
             vst1q_f32(&result->data[i], vaddq_f32(a0, b0));
             vst1q_f32(&result->data[i + 4], vaddq_f32(a1, b1));
@@ -1129,10 +1134,21 @@ static mt_tensor *mt__add_neon_2d(mt_tensor *a, mt_tensor *b,
     else if (b_rows == 1 && a_rows == result_rows) {
 #pragma omp parallel for
         for (int i = 0; i < result_rows; i++) {
+            // Prefetch next row
+            if (i + 1 < result_rows) {
+                __builtin_prefetch(&a->data[(i + 1) * a_cols], 0, 3);
+            }
+
             int j = 0;
 
             // Process 16 elements at a time
             for (; j <= result_cols - 16; j += 16) {
+                // Prefetch ahead in current row
+                if (j + 32 < result_cols) {
+                    __builtin_prefetch(&a->data[i * a_cols + j + 32], 0, 3);
+                    __builtin_prefetch(&b->data[j + 32], 0, 3);
+                }
+
                 // Load from matrix a
                 float32x4_t a0 = vld1q_f32(&a->data[i * a_cols + j]);
                 float32x4_t a1 = vld1q_f32(&a->data[i * a_cols + j + 4]);
@@ -1166,10 +1182,21 @@ static mt_tensor *mt__add_neon_2d(mt_tensor *a, mt_tensor *b,
     else if (a_rows == 1 && b_rows == result_rows) {
 #pragma omp parallel for
         for (int i = 0; i < result_rows; i++) {
+            // Prefetch next row
+            if (i + 1 < result_rows) {
+                __builtin_prefetch(&b->data[(i + 1) * b_cols], 0, 3);
+            }
+
             int j = 0;
 
             // Process 16 elements at a time
             for (; j <= result_cols - 16; j += 16) {
+                // Prefetch ahead in current row
+                if (j + 32 < result_cols) {
+                    __builtin_prefetch(&a->data[j + 32], 0, 3);
+                    __builtin_prefetch(&b->data[i * b_cols + j + 32], 0, 3);
+                }
+
                 // Load from row vector a
                 float32x4_t a0 = vld1q_f32(&a->data[j]);
                 float32x4_t a1 = vld1q_f32(&a->data[j + 4]);
