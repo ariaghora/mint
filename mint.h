@@ -288,8 +288,7 @@ MTDEF void       mt_tensor_free(mt_tensor *t);
 // Load image as a tensor with shape of CxHxW. C is the number of channel, H
 // is the image height, and W is the image widthmt_tensor
 // *mt_tensor_load_image(char *filename); Pad along tensor's dimension
-MTDEF mt_tensor *mt_tensor_pad(mt_tensor *t, int *pads, mt_pad_mode mode,
-                               mt_float constant_val);
+MTDEF mt_tensor *mt_tensor_pad(mt_tensor *t, int *pads, mt_pad_mode mode);
 // Swap tensor's dimensions
 MTDEF mt_tensor *mt_tensor_permute_dims(mt_tensor *t, int *dims);
 // Print tensor content representation
@@ -2069,6 +2068,7 @@ static void mt__neon_sgemm(int m, int n, int k, float alpha, const float *A,
 }
 #endif
 
+#if !defined(MT_USE_NEON) && !defined(MT_USE_BLAS)
 // Generic SGEMM implementation
 static void mt__generic_sgemm(int m, int n, int k, float alpha, const float *A,
                               int lda, const float *B, int ldb, float beta,
@@ -2102,6 +2102,7 @@ static void mt__generic_sgemm(int m, int n, int k, float alpha, const float *A,
         }
     }
 }
+#endif
 
 // Unified SGEMM interface
 MTDEF void mt__sgemm(int m, int n, int k, float alpha, const float *A, int lda,
@@ -2121,8 +2122,10 @@ mt_tensor *mt_matmul(mt_tensor *a, mt_tensor *b) {
     int n = b->ndim == 1 ? b->shape[0] : b->shape[1];
     int k = a->ndim == 1 ? a->shape[0] : a->shape[1];
 
+#ifndef NDEBUG
     int tda = a->ndim == 1 ? a->shape[0] : a->shape[1];
     int ldb = b->ndim == 1 ? 1 : b->shape[0];
+#endif
 
     MT_ASSERT_F(a->ndim <= 2, "A must have <= 2 dimensions, got %d dimension",
                 a->ndim);
@@ -2215,8 +2218,7 @@ mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int *pads) {
  * mode: Padding mode (only MT_PAD_REFLECT is implemented for now)
  * constant_val: Value for constant padding (unused in reflect mode)
  */
-mt_tensor *mt_tensor_pad(mt_tensor *t, int *pads, mt_pad_mode mode,
-                         mt_float constant_val) {
+mt_tensor *mt_tensor_pad(mt_tensor *t, int *pads, mt_pad_mode mode) {
     // Ensure the input tensor has 4 or fewer dimensions
     MT_ASSERT(t->ndim <= 4, "Input tensor must have 4 or fewer dimensions");
 
@@ -2969,9 +2971,15 @@ void mt_tensor_reshape_inplace(mt_tensor *t, int *new_shape, int new_ndim) {
     // zero-out old shape for the sake of safety
     for (int i = 0; i < t->ndim; ++i)
         t->shape[i] = 0;
+
+#ifndef NDEBUG
     int tensor_new_element_len = 1;
+#endif
+
     for (int i = 0; i < new_ndim; ++i) {
+#ifndef NDEBUG
         tensor_new_element_len *= new_shape[i];
+#endif
         t->shape[i] = new_shape[i];
     }
     MT_ASSERT_F(tensor_old_element_len == tensor_new_element_len,
@@ -2986,10 +2994,12 @@ void mt_tensor_split(mt_tensor *t, int axis, int *splits, int n_split,
               "axis cannot be negative or exceeding tensor ndim");
 
     // Calculate total split size and verify it matches the tensor dimension
+#ifndef NDEBUG
     int total_split = 0;
     for (int i = 0; i < n_split; i++) {
         total_split += splits[i];
     }
+#endif
     MT_ASSERT_F(total_split == t->shape[axis],
                 "Total split size (%d) must match the tensor dimension along "
                 "the split axis (%d)",
@@ -3686,7 +3696,7 @@ MTDEF void mt__layer_forward(mt_layer *l, mt_model *model) {
         for (int i = 0; i < pads_len; ++i)
             pads_int[i] = (int)pads->data[i];
         WARN_LOG("currently pad mode is always reflect");
-        res = mt_tensor_pad(input, pads_int, MT_PAD_REFLECT, 0.0);
+        res = mt_tensor_pad(input, pads_int, MT_PAD_REFLECT);
 
         mt__model_set_tensor(model, l->outputs[0], res);
 
@@ -3696,11 +3706,13 @@ MTDEF void mt__layer_forward(mt_layer *l, mt_model *model) {
         mt_tensor *input = model->tensors[l->inputs[0]];
         mt_tensor *expon = model->tensors[l->inputs[1]];
 
+#ifndef NDEBUG
         int expon_numel = mt_tensor_count_element(expon);
         MT_ASSERT_F(expon_numel == 1,
                     "can only exponentiate tensor with a scalar (rank 0 "
                     "tensor), found rank %d with %d elements",
                     expon->ndim, expon_numel);
+#endif
 
         res = mt_tensor_alloc_values(input->shape, input->ndim, input->data);
         for (int i = 0; i > mt_tensor_count_element(input); ++i) {
@@ -3920,17 +3932,25 @@ void mt_model_run(mt_model *model, void (*callback)(int, int, void *),
     }
 
     // Execute forward
+#ifndef NDEBUG
     double total_time = 0;
+#endif
     for (int i = 0; i < *sorted_len_ptr; ++i) {
         mt_layer *l = model->layers[sorted_ids[i]];
 
         DEBUG_LOG_F("[%d/%d] executing layer id %d (type %s)", i + 1,
                     *sorted_len_ptr, l->id, mt_layer_kind_to_string(l->kind));
+#ifndef NDEBUG
         clock_t begin = clock();
+#endif
+
         mt__layer_forward(l, model);
+
+#ifndef NDEBUG
         clock_t end        = clock();
         double  time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
         total_time += time_spent;
+#endif
         DEBUG_LOG_F("took %f", time_spent);
 
         if (callback != NULL)
