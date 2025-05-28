@@ -1913,28 +1913,124 @@ mt_tensor *mt_local_response_norm(mt_tensor *t, int size, mt_float alpha,
 static void mt__neon_sgemm(int m, int n, int k, float alpha, const float *A,
                            int lda, const float *B, int ldb, float beta,
                            float *C, int ldc) {
-#pragma omp parallel for collapse(2)
     for (int i = 0; i < m; i += 4) {
         for (int j = 0; j < n; j += 4) {
+            // Prefetch next tiles of A and B
+            if (j + 8 < n) {
+                __builtin_prefetch(&B[0 * ldb + (j + 8)], 0, 3);
+            } else if (i + 8 < m) {
+                __builtin_prefetch(&A[(i + 8) * lda + 0], 0, 3);
+            }
+
             float32x4_t c00 = vdupq_n_f32(0);
             float32x4_t c10 = vdupq_n_f32(0);
             float32x4_t c20 = vdupq_n_f32(0);
             float32x4_t c30 = vdupq_n_f32(0);
 
-            for (int l = 0; l < k; l++) {
-                float32x4_t b0 = vld1q_f32(&B[l * ldb + j]);
+            // Unroll the inner loop for better instruction scheduling
+            for (int l = 0; l < k; l += 4) {
+                // Prefetch next chunks of the inner dimension
+                if (l + 8 < k) {
+                    __builtin_prefetch(&A[i * lda + (l + 8)], 0, 3);
+                    __builtin_prefetch(&B[(l + 8) * ldb + j], 0, 3);
+                }
 
-                float32x4_t a0 = vdupq_n_f32(A[i * lda + l]);
-                float32x4_t a1 = vdupq_n_f32(A[(i + 1) * lda + l]);
-                float32x4_t a2 = vdupq_n_f32(A[(i + 2) * lda + l]);
-                float32x4_t a3 = vdupq_n_f32(A[(i + 3) * lda + l]);
+                // Process 4 elements of k dimension at once when possible
+                if (l + 3 < k) {
+                    // Load 4 rows of B (each 4 elements wide) - transposed
+                    // access
+                    float32x4_t b0 = vld1q_f32(&B[(l + 0) * ldb + j]);
+                    float32x4_t b1 = vld1q_f32(&B[(l + 1) * ldb + j]);
+                    float32x4_t b2 = vld1q_f32(&B[(l + 2) * ldb + j]);
+                    float32x4_t b3 = vld1q_f32(&B[(l + 3) * ldb + j]);
 
-                c00 = vmlaq_f32(c00, a0, b0);
-                c10 = vmlaq_f32(c10, a1, b0);
-                c20 = vmlaq_f32(c20, a2, b0);
-                c30 = vmlaq_f32(c30, a3, b0);
+                    // For each row of A, accumulate against all 4 rows of B
+                    // Row 0 of A
+                    float32x4_t a0_0 = vdupq_n_f32(A[i * lda + (l + 0)]);
+                    float32x4_t a0_1 = vdupq_n_f32(A[i * lda + (l + 1)]);
+                    float32x4_t a0_2 = vdupq_n_f32(A[i * lda + (l + 2)]);
+                    float32x4_t a0_3 = vdupq_n_f32(A[i * lda + (l + 3)]);
+                    c00              = vmlaq_f32(c00, a0_0, b0);
+                    c00              = vmlaq_f32(c00, a0_1, b1);
+                    c00              = vmlaq_f32(c00, a0_2, b2);
+                    c00              = vmlaq_f32(c00, a0_3, b3);
+
+                    // Row 1 of A
+                    if (i + 1 < m) {
+                        float32x4_t a1_0 =
+                            vdupq_n_f32(A[(i + 1) * lda + (l + 0)]);
+                        float32x4_t a1_1 =
+                            vdupq_n_f32(A[(i + 1) * lda + (l + 1)]);
+                        float32x4_t a1_2 =
+                            vdupq_n_f32(A[(i + 1) * lda + (l + 2)]);
+                        float32x4_t a1_3 =
+                            vdupq_n_f32(A[(i + 1) * lda + (l + 3)]);
+                        c10 = vmlaq_f32(c10, a1_0, b0);
+                        c10 = vmlaq_f32(c10, a1_1, b1);
+                        c10 = vmlaq_f32(c10, a1_2, b2);
+                        c10 = vmlaq_f32(c10, a1_3, b3);
+                    }
+
+                    // Row 2 of A
+                    if (i + 2 < m) {
+                        float32x4_t a2_0 =
+                            vdupq_n_f32(A[(i + 2) * lda + (l + 0)]);
+                        float32x4_t a2_1 =
+                            vdupq_n_f32(A[(i + 2) * lda + (l + 1)]);
+                        float32x4_t a2_2 =
+                            vdupq_n_f32(A[(i + 2) * lda + (l + 2)]);
+                        float32x4_t a2_3 =
+                            vdupq_n_f32(A[(i + 2) * lda + (l + 3)]);
+                        c20 = vmlaq_f32(c20, a2_0, b0);
+                        c20 = vmlaq_f32(c20, a2_1, b1);
+                        c20 = vmlaq_f32(c20, a2_2, b2);
+                        c20 = vmlaq_f32(c20, a2_3, b3);
+                    }
+
+                    // Row 3 of A
+                    if (i + 3 < m) {
+                        float32x4_t a3_0 =
+                            vdupq_n_f32(A[(i + 3) * lda + (l + 0)]);
+                        float32x4_t a3_1 =
+                            vdupq_n_f32(A[(i + 3) * lda + (l + 1)]);
+                        float32x4_t a3_2 =
+                            vdupq_n_f32(A[(i + 3) * lda + (l + 2)]);
+                        float32x4_t a3_3 =
+                            vdupq_n_f32(A[(i + 3) * lda + (l + 3)]);
+                        c30 = vmlaq_f32(c30, a3_0, b0);
+                        c30 = vmlaq_f32(c30, a3_1, b1);
+                        c30 = vmlaq_f32(c30, a3_2, b2);
+                        c30 = vmlaq_f32(c30, a3_3, b3);
+                    }
+                } else {
+                    // Handle remaining k iterations one at a time
+                    for (int ll = l; ll < k && ll < l + 4; ll++) {
+                        float32x4_t b0 = vld1q_f32(&B[ll * ldb + j]);
+
+                        if (i < m) {
+                            float32x4_t a0 = vdupq_n_f32(A[i * lda + ll]);
+                            c00            = vmlaq_f32(c00, a0, b0);
+                        }
+
+                        if (i + 1 < m) {
+                            float32x4_t a1 = vdupq_n_f32(A[(i + 1) * lda + ll]);
+                            c10            = vmlaq_f32(c10, a1, b0);
+                        }
+
+                        if (i + 2 < m) {
+                            float32x4_t a2 = vdupq_n_f32(A[(i + 2) * lda + ll]);
+                            c20            = vmlaq_f32(c20, a2, b0);
+                        }
+
+                        if (i + 3 < m) {
+                            float32x4_t a3 = vdupq_n_f32(A[(i + 3) * lda + ll]);
+                            c30            = vmlaq_f32(c30, a3, b0);
+                        }
+                    }
+                }
             }
 
+            // Apply alpha scaling
             c00 = vmulq_n_f32(c00, alpha);
             c10 = vmulq_n_f32(c10, alpha);
             c20 = vmulq_n_f32(c20, alpha);
@@ -1943,8 +2039,14 @@ static void mt__neon_sgemm(int m, int n, int k, float alpha, const float *A,
             int rem_m = (m - i) < 4 ? (m - i) : 4;
             int rem_n = (n - j) < 4 ? (n - j) : 4;
 
+            // Store results with beta scaling
             float32x4_t result[4] = {c00, c10, c20, c30};
             for (int ii = 0; ii < rem_m; ii++) {
+                // Prefetch next C row
+                if (ii + 1 < rem_m) {
+                    __builtin_prefetch(&C[(i + ii + 1) * ldc + j], 0, 3);
+                }
+
                 float32x4_t c    = vld1q_f32(&C[(i + ii) * ldc + j]);
                 float32x4_t temp = result[ii];
 
@@ -2568,10 +2670,53 @@ MTDEF void mt_relu_inplace(mt_tensor *t) {
     int       n    = mt_tensor_count_element(t);
     mt_float *data = t->data;
 
+#ifdef MT_USE_NEON
+    int         i = 0;
+    // Zero vector for comparison
+    float32x4_t zero = vdupq_n_f32(0.0f);
+
+    // Process 16 elements at once for better throughput
+    for (; i <= n - 16; i += 16) {
+        // Prefetch next chunk
+        __builtin_prefetch(&data[i + 64], 0, 3);
+
+        // Load 16 elements (4 vectors)
+        float32x4_t v0 = vld1q_f32(&data[i]);
+        float32x4_t v1 = vld1q_f32(&data[i + 4]);
+        float32x4_t v2 = vld1q_f32(&data[i + 8]);
+        float32x4_t v3 = vld1q_f32(&data[i + 12]);
+
+        // ReLU operation: max(x, 0)
+        v0 = vmaxq_f32(v0, zero);
+        v1 = vmaxq_f32(v1, zero);
+        v2 = vmaxq_f32(v2, zero);
+        v3 = vmaxq_f32(v3, zero);
+
+        // Store results back
+        vst1q_f32(&data[i], v0);
+        vst1q_f32(&data[i + 4], v1);
+        vst1q_f32(&data[i + 8], v2);
+        vst1q_f32(&data[i + 12], v3);
+    }
+
+    // Process remaining elements in chunks of 4
+    for (; i <= n - 4; i += 4) {
+        float32x4_t v = vld1q_f32(&data[i]);
+        v             = vmaxq_f32(v, zero);
+        vst1q_f32(&data[i], v);
+    }
+
+    // Process any remaining elements
+    for (; i < n; ++i) {
+        data[i] = data[i] > 0 ? data[i] : 0;
+    }
+#else
+// Original implementation for non-NEON platforms
 #pragma omp parallel for simd schedule(static)
     for (int i = 0; i < n; ++i) {
         data[i] = data[i] > 0 ? data[i] : 0;
     }
+#endif
 }
 
 void mt_sigmoid_inplace(mt_tensor *t) {
