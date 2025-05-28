@@ -994,6 +994,45 @@ MTDEF mt_tensor *mt__unop(mt_tensor *t, mt_float f(mt_float)) {
 
 static mt_float mt__s_add(mt_float a, mt_float b) { return a + b; }
 #ifdef MT_USE_NEON
+
+struct AddNeon2dCase1ThreadData {
+    int        last;
+    int        total;
+    mt_tensor *a;
+    mt_tensor *b;
+    mt_tensor *result;
+    mt_float (*func)(mt_float, mt_float);
+};
+
+MTDEF void mt__add_neon_2d_case1_thread(int i, void *userdata) {
+    struct AddNeon2dCase1ThreadData *data =
+        (struct AddNeon2dCase1ThreadData *)userdata;
+
+    // Prefetch next chunks
+    if (i + 32 < data->total) {
+        __builtin_prefetch(&data->a->data[i + 32], 0, 3);
+        __builtin_prefetch(&data->b->data[i + 32], 0, 3);
+    }
+
+    // Load values
+    float32x4_t a0 = vld1q_f32(&data->a->data[i]);
+    float32x4_t a1 = vld1q_f32(&data->a->data[i + 4]);
+    float32x4_t a2 = vld1q_f32(&data->a->data[i + 8]);
+    float32x4_t a3 = vld1q_f32(&data->a->data[i + 12]);
+
+    float32x4_t b0 = vld1q_f32(&data->b->data[i]);
+    float32x4_t b1 = vld1q_f32(&data->b->data[i + 4]);
+    float32x4_t b2 = vld1q_f32(&data->b->data[i + 8]);
+    float32x4_t b3 = vld1q_f32(&data->b->data[i + 12]);
+
+    // Use vectorized addition
+    vst1q_f32(&data->result->data[i], vaddq_f32(a0, b0));
+    vst1q_f32(&data->result->data[i + 4], vaddq_f32(a1, b1));
+    vst1q_f32(&data->result->data[i + 8], vaddq_f32(a2, b2));
+    vst1q_f32(&data->result->data[i + 12], vaddq_f32(a3, b3));
+    data->last = i + 16;
+}
+
 // Specialized NEON binary operation for 2D tensors
 MTDEF mt_tensor *mt__add_neon_2d(mt_tensor *a, mt_tensor *b,
                                  mt_float f(mt_float, mt_float)) {
@@ -1009,10 +1048,13 @@ MTDEF mt_tensor *mt__add_neon_2d(mt_tensor *a, mt_tensor *b,
     // Case 1: Both tensors have same shape (no broadcasting)
     if (a_rows == b_rows && a_cols == b_cols) {
         int total = result_rows * result_cols;
-        int i     = 0;
+        int last  = 0;
+
+        // NOTE(Aria): This is slower than the loop below.
+        // mt_parallel_for(total, 16, 8, mt__add_neon_2d_case1_thread, &data);
 
         // Process 16 elements at a time
-        for (; i <= total - 16; i += 16) {
+        for (int i = 0; i <= total - 16; i += 16) {
             // Prefetch next chunks
             if (i + 32 < total) {
                 __builtin_prefetch(&a->data[i + 32], 0, 3);
@@ -1035,11 +1077,13 @@ MTDEF mt_tensor *mt__add_neon_2d(mt_tensor *a, mt_tensor *b,
             vst1q_f32(&result->data[i + 4], vaddq_f32(a1, b1));
             vst1q_f32(&result->data[i + 8], vaddq_f32(a2, b2));
             vst1q_f32(&result->data[i + 12], vaddq_f32(a3, b3));
+
+            last = i;
         }
 
         // Handle remaining elements
-        for (; i < total; i++) {
-            result->data[i] = f(a->data[i], b->data[i]);
+        for (; last < total; last++) {
+            result->data[last] = f(a->data[last], b->data[last]);
         }
     }
     // Case 2: b is a row vector (1xN) being broadcast
@@ -1818,9 +1862,246 @@ mt_tensor *mt_local_response_norm(mt_tensor *t, int size, mt_float alpha,
 }
 
 #ifdef MT_USE_NEON
-static void mt__neon_sgemm(int m, int n, int k, float alpha, const float *A,
-                           int lda, const float *B, int ldb, float beta,
-                           float *C, int ldc) {
+struct NeonSgemmRowThreadData {
+    int             m;
+    int             n;
+    int             k;
+    mt_float        alpha;
+    const mt_float *A;
+    const mt_float *B;
+    mt_float       *C;
+    int             lda;
+    int             ldb;
+    int             ldc;
+};
+
+MTDEF void mt__neon_sgemm_row_thread(int i, void *userdata) {
+    struct NeonSgemmRowThreadData *data =
+        (struct NeonSgemmRowThreadData *)userdata;
+
+    int             m     = data->m;
+    int             n     = data->n;
+    int             k     = data->k;
+    mt_float        alpha = data->alpha;
+    const mt_float *A     = data->A;
+    const mt_float *B     = data->B;
+    mt_float       *C     = data->C;
+    int             lda   = data->lda;
+    int             ldb   = data->ldb;
+    int             ldc   = data->ldc;
+
+    // Each thread handles a block of rows
+    int block_size = (m + MT_MAX_THREADS - 1) / MT_MAX_THREADS;
+    int start_row  = i * block_size;
+    int end_row    = (start_row + block_size < m) ? start_row + block_size : m;
+
+    // Process assigned rows
+    for (int ii = start_row; ii < end_row; ii += 4) {
+        // Calculate how many rows we can process (handle edge case)
+        int rows_left = end_row - ii;
+        int row_block = (rows_left >= 4) ? 4 : rows_left;
+
+        for (int j = 0; j < n; j += 4) {
+            // Prefetch next tiles of B
+            if (j + 8 < n) {
+                __builtin_prefetch(&B[0 * ldb + (j + 8)], 0, 3);
+            }
+
+            // Initialize accumulators
+            float32x4_t c00 = vdupq_n_f32(0);
+            float32x4_t c10 = vdupq_n_f32(0);
+            float32x4_t c20 = vdupq_n_f32(0);
+            float32x4_t c30 = vdupq_n_f32(0);
+
+            // Unroll the inner loop for better instruction scheduling
+            for (int l = 0; l < k; l += 4) {
+                // Prefetch next chunks of the inner dimension
+                if (l + 8 < k) {
+                    __builtin_prefetch(&A[ii * lda + (l + 8)], 0, 3);
+                    __builtin_prefetch(&B[(l + 8) * ldb + j], 0, 3);
+                }
+
+                // Process 4 elements of k dimension at once when possible
+                if (l + 3 < k) {
+                    // Load 4 rows of B (each 4 elements wide)
+                    float32x4_t b0 = vld1q_f32(&B[(l + 0) * ldb + j]);
+                    float32x4_t b1 = vld1q_f32(&B[(l + 1) * ldb + j]);
+                    float32x4_t b2 = vld1q_f32(&B[(l + 2) * ldb + j]);
+                    float32x4_t b3 = vld1q_f32(&B[(l + 3) * ldb + j]);
+
+                    // For each row of A, accumulate against all 4 rows of B
+                    // Row 0 of A
+                    if (row_block > 0) {
+                        float32x4_t a0_0 = vdupq_n_f32(A[ii * lda + (l + 0)]);
+                        float32x4_t a0_1 = vdupq_n_f32(A[ii * lda + (l + 1)]);
+                        float32x4_t a0_2 = vdupq_n_f32(A[ii * lda + (l + 2)]);
+                        float32x4_t a0_3 = vdupq_n_f32(A[ii * lda + (l + 3)]);
+                        c00              = vmlaq_f32(c00, a0_0, b0);
+                        c00              = vmlaq_f32(c00, a0_1, b1);
+                        c00              = vmlaq_f32(c00, a0_2, b2);
+                        c00              = vmlaq_f32(c00, a0_3, b3);
+                    }
+
+                    // Row 1 of A
+                    if (row_block > 1) {
+                        float32x4_t a1_0 =
+                            vdupq_n_f32(A[(ii + 1) * lda + (l + 0)]);
+                        float32x4_t a1_1 =
+                            vdupq_n_f32(A[(ii + 1) * lda + (l + 1)]);
+                        float32x4_t a1_2 =
+                            vdupq_n_f32(A[(ii + 1) * lda + (l + 2)]);
+                        float32x4_t a1_3 =
+                            vdupq_n_f32(A[(ii + 1) * lda + (l + 3)]);
+                        c10 = vmlaq_f32(c10, a1_0, b0);
+                        c10 = vmlaq_f32(c10, a1_1, b1);
+                        c10 = vmlaq_f32(c10, a1_2, b2);
+                        c10 = vmlaq_f32(c10, a1_3, b3);
+                    }
+
+                    // Row 2 of A
+                    if (row_block > 2) {
+                        float32x4_t a2_0 =
+                            vdupq_n_f32(A[(ii + 2) * lda + (l + 0)]);
+                        float32x4_t a2_1 =
+                            vdupq_n_f32(A[(ii + 2) * lda + (l + 1)]);
+                        float32x4_t a2_2 =
+                            vdupq_n_f32(A[(ii + 2) * lda + (l + 2)]);
+                        float32x4_t a2_3 =
+                            vdupq_n_f32(A[(ii + 2) * lda + (l + 3)]);
+                        c20 = vmlaq_f32(c20, a2_0, b0);
+                        c20 = vmlaq_f32(c20, a2_1, b1);
+                        c20 = vmlaq_f32(c20, a2_2, b2);
+                        c20 = vmlaq_f32(c20, a2_3, b3);
+                    }
+
+                    // Row 3 of A
+                    if (row_block > 3) {
+                        float32x4_t a3_0 =
+                            vdupq_n_f32(A[(ii + 3) * lda + (l + 0)]);
+                        float32x4_t a3_1 =
+                            vdupq_n_f32(A[(ii + 3) * lda + (l + 1)]);
+                        float32x4_t a3_2 =
+                            vdupq_n_f32(A[(ii + 3) * lda + (l + 2)]);
+                        float32x4_t a3_3 =
+                            vdupq_n_f32(A[(ii + 3) * lda + (l + 3)]);
+                        c30 = vmlaq_f32(c30, a3_0, b0);
+                        c30 = vmlaq_f32(c30, a3_1, b1);
+                        c30 = vmlaq_f32(c30, a3_2, b2);
+                        c30 = vmlaq_f32(c30, a3_3, b3);
+                    }
+                } else {
+                    // Handle remaining k iterations one at a time
+                    for (int ll = l; ll < k && ll < l + 4; ll++) {
+                        float32x4_t b0 = vld1q_f32(&B[ll * ldb + j]);
+
+                        if (row_block > 0) {
+                            float32x4_t a0 = vdupq_n_f32(A[ii * lda + ll]);
+                            c00            = vmlaq_f32(c00, a0, b0);
+                        }
+
+                        if (row_block > 1) {
+                            float32x4_t a1 =
+                                vdupq_n_f32(A[(ii + 1) * lda + ll]);
+                            c10 = vmlaq_f32(c10, a1, b0);
+                        }
+
+                        if (row_block > 2) {
+                            float32x4_t a2 =
+                                vdupq_n_f32(A[(ii + 2) * lda + ll]);
+                            c20 = vmlaq_f32(c20, a2, b0);
+                        }
+
+                        if (row_block > 3) {
+                            float32x4_t a3 =
+                                vdupq_n_f32(A[(ii + 3) * lda + ll]);
+                            c30 = vmlaq_f32(c30, a3, b0);
+                        }
+                    }
+                }
+            }
+
+            // Apply alpha scaling
+            c00 = vmulq_n_f32(c00, alpha);
+            c10 = vmulq_n_f32(c10, alpha);
+            c20 = vmulq_n_f32(c20, alpha);
+            c30 = vmulq_n_f32(c30, alpha);
+
+            // Calculate column limits
+            int cols_left = n - j;
+            int col_block = (cols_left >= 4) ? 4 : cols_left;
+
+            // Store results using fixed indices for vgetq_lane_f32
+            // Row 0
+            if (row_block > 0) {
+                mt_float temp_arr[4];
+                vst1q_f32(temp_arr, c00);
+                for (int jj = 0; jj < col_block; jj++) {
+                    C[ii * ldc + j + jj] += temp_arr[jj];
+                }
+            }
+
+            // Row 1
+            if (row_block > 1) {
+                mt_float temp_arr[4];
+                vst1q_f32(temp_arr, c10);
+                for (int jj = 0; jj < col_block; jj++) {
+                    C[(ii + 1) * ldc + j + jj] += temp_arr[jj];
+                }
+            }
+
+            // Row 2
+            if (row_block > 2) {
+                mt_float temp_arr[4];
+                vst1q_f32(temp_arr, c20);
+                for (int jj = 0; jj < col_block; jj++) {
+                    C[(ii + 2) * ldc + j + jj] += temp_arr[jj];
+                }
+            }
+
+            // Row 3
+            if (row_block > 3) {
+                mt_float temp_arr[4];
+                vst1q_f32(temp_arr, c30);
+                for (int jj = 0; jj < col_block; jj++) {
+                    C[(ii + 3) * ldc + j + jj] += temp_arr[jj];
+                }
+            }
+        }
+    }
+}
+
+MTDEF void mt__neon_sgemm(int m, int n, int k, mt_float alpha,
+                          const mt_float *A, int lda, const mt_float *B,
+                          int ldb, mt_float beta, mt_float *C, int ldc) {
+    // Apply beta scaling to C
+    if (beta != 1.0f) {
+        for (int i = 0; i < m; i++) {
+            for (int j = 0; j < n; j++) {
+                C[i * ldc + j] *= beta;
+            }
+        }
+    }
+
+#ifdef MT_USE_PTHREAD
+    // Use threaded version if we have enough work
+    int                           num_threads = MT_MAX_THREADS;
+    struct NeonSgemmRowThreadData data        = {.m     = m,
+                                                 .n     = n,
+                                                 .k     = k,
+                                                 .alpha = alpha,
+                                                 .A     = A,
+                                                 .B     = B,
+                                                 .C     = C,
+                                                 .lda   = lda,
+                                                 .ldb   = ldb,
+                                                 .ldc   = ldc};
+
+    mt_parallel_for(num_threads, 1, num_threads, mt__neon_sgemm_row_thread,
+                    &data);
+    return;
+#endif
+
+    // single-threaded fallback
     for (int i = 0; i < m; i += 4) {
         for (int j = 0; j < n; j += 4) {
             // Prefetch next tiles of A and B
@@ -1947,7 +2228,7 @@ static void mt__neon_sgemm(int m, int n, int k, float alpha, const float *A,
             int rem_m = (m - i) < 4 ? (m - i) : 4;
             int rem_n = (n - j) < 4 ? (n - j) : 4;
 
-            // Store results with beta scaling
+            // Store results
             float32x4_t result[4] = {c00, c10, c20, c30};
             for (int ii = 0; ii < rem_m; ii++) {
                 // Prefetch next C row
@@ -1955,21 +2236,11 @@ static void mt__neon_sgemm(int m, int n, int k, float alpha, const float *A,
                     __builtin_prefetch(&C[(i + ii + 1) * ldc + j], 0, 3);
                 }
 
-                float32x4_t c    = vld1q_f32(&C[(i + ii) * ldc + j]);
-                float32x4_t temp = result[ii];
+                mt_float temp_arr[4];
+                vst1q_f32(temp_arr, result[ii]);
 
-                if (beta != 0.0f) {
-                    temp = vmlaq_n_f32(temp, c, beta);
-                }
-
-                if (rem_n == 4) {
-                    vst1q_f32(&C[(i + ii) * ldc + j], temp);
-                } else {
-                    float temp_arr[4];
-                    vst1q_f32(temp_arr, temp);
-                    for (int jj = 0; jj < rem_n; jj++) {
-                        C[(i + ii) * ldc + j + jj] = temp_arr[jj];
-                    }
+                for (int jj = 0; jj < rem_n; jj++) {
+                    C[(i + ii) * ldc + j + jj] += temp_arr[jj];
                 }
             }
         }
@@ -1979,9 +2250,9 @@ static void mt__neon_sgemm(int m, int n, int k, float alpha, const float *A,
 
 #if !defined(MT_USE_NEON) && !defined(MT_USE_BLAS)
 // Generic SGEMM implementation
-static void mt__generic_sgemm(int m, int n, int k, float alpha, const float *A,
-                              int lda, const float *B, int ldb, float beta,
-                              float *C, int ldc) {
+static void mt__generic_sgemm(int m, int n, int k, mt_float alpha,
+                              const mt_float *A, int lda, const mt_float *B,
+                              int ldb, mt_float beta, mt_float *C, int ldc) {
 #pragma omp parallel for collapse(2)
     for (int i = 0; i < m; i += MATMUL_BLOCK_SIZE) {
         for (int j = 0; j < n; j += MATMUL_BLOCK_SIZE) {
@@ -1995,7 +2266,7 @@ static void mt__generic_sgemm(int m, int n, int k, float alpha, const float *A,
 
                 for (int ii = i; ii < i_end; ii++) {
                     for (int jj = j; jj < j_end; jj++) {
-                        float sum = 0.0f;
+                        mt_float sum = 0.0f;
                         for (int ll = l; ll < l_end; ll++) {
                             sum += A[ii * lda + ll] * B[ll * ldb + jj];
                         }
