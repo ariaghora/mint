@@ -11,13 +11,13 @@ int main() {
     start = clock();
     
     mt_tensor *t1 = mt_tensor_alloc_fill(MT_ARR_INT(100000, 10000), 2, 1.0f);
-    mt_tensor *t2 = mt_tensor_alloc_fill(MT_ARR_INT(1, 10000), 2, 1.0f);
+    mt_tensor *t2 = mt_tensor_alloc_fill(MT_ARR_INT(100000, 10000), 2, 1.0f);
     mt_tensor *t3 = mt_add(t1, t2);
 
     
     end = clock();
     cpu_time_used = ((double) (end - start)) / CLOCKS_PER_SEC;
-    printf("Execution time: %f seconds\n", cpu_time_used);
+    // printf("Execution time: %f seconds\n", cpu_time_used);
 
     // sum the tensor
     double sum = 0.0;

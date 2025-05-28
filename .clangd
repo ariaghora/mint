@@ -5,4 +5,4 @@ If:
   PathMatch: [.*\.h, .*\.hpp]
 
 CompileFlags:
-  Add: [-DMT_IMPLEMENTATION]
+  Add: [-DMT_IMPLEMENTATION, -DMT_USE_NEON]

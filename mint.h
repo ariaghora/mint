@@ -399,6 +399,13 @@ MTDEF void              mt_layer_debug_info(mt_layer *l);
 #include <cblas.h>
 #endif
 
+#ifdef MT_USE_PTHREAD
+#include <pthread.h>
+#endif
+#ifndef MT_MAX_THREADS
+#define MT_MAX_THREADS 32
+#endif
+
 #define MAX_LAYER_COUNT             1000
 #define MAX_LAYER_INPUT_COUNT       10
 #define MAX_LAYER_OUTPUT_COUNT      10
@@ -641,6 +648,53 @@ typedef struct mt_model {
         exit(1);                                                               \
     } while (0)
 
+#ifdef MT_USE_PTHREAD
+typedef struct {
+    int start, end;
+    void (*func)(int i, void *userdata);
+    void *userdata;
+} Job;
+
+void *thread_entry(void *arg) {
+    Job *job = (Job *)arg;
+    for (int i = job->start; i < job->end; ++i)
+        job->func(i, job->userdata);
+    return NULL;
+}
+
+// Parallel for loop
+MTDEF void mt_parallel_for(int count, int increment, int num_threads,
+                           void (*func)(int i, void *userdata),
+                           void *userdata) {
+    pthread_t threads[MT_MAX_THREADS];
+    Job       jobs[MT_MAX_THREADS];
+    int       chunk = (count + num_threads - 1) / num_threads;
+
+    for (int t = 0; t < num_threads; t += increment) {
+        int start = t * chunk;
+        int end   = start + chunk;
+        if (start >= count)
+            break;
+        if (end > count)
+            end = count;
+
+        jobs[t] = (Job){
+            .start = start, .end = end, .func = func, .userdata = userdata};
+        pthread_create(&threads[t], NULL, thread_entry, &jobs[t]);
+    }
+
+    for (int t = 0; t < num_threads; ++t)
+        if (t * chunk < count)
+            pthread_join(threads[t], NULL);
+}
+#else
+MTDEF void mt_parallel_for(int count, int increment, int threads,
+                           void (*fn)(int, void *), void *user) {
+    for (int i = 0; i < count; i += increment)
+        fn(i, user);
+}
+#endif
+
 mt_tensor *mt_tensor_clone(mt_tensor *t) {
     return mt_tensor_alloc_values(t->shape, t->ndim, t->data);
 }
@@ -792,6 +846,18 @@ static void mt__binop_3d(mt_float *a, int *a_shape, mt_float *b, int *b_shape,
     }
 }
 
+typedef struct {
+    mt_tensor *a;
+    mt_tensor *b;
+    mt_tensor *result;
+    mt_float (*func)(mt_float, mt_float);
+} BinopThreadData;
+
+MTDEF void mt__binop_thread(int i, void *userdata) {
+    BinopThreadData *data = (BinopThreadData *)userdata;
+    data->result->data[i] = data->func(data->a->data[i], data->b->data[i]);
+}
+
 // General binary operator.
 // NOTE(Aria): This is meant to be used internally.
 MTDEF mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
@@ -812,10 +878,9 @@ MTDEF mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
     if ((a->ndim == b->ndim) && same_shape) {
         mt_tensor *result = mt_tensor_alloc(a->shape, a->ndim);
         int        numel  = mt_tensor_count_element(a);
-#pragma omp parallel for
-        for (int i = 0; i < numel; ++i) {
-            result->data[i] = f(a->data[i], b->data[i]);
-        }
+
+        BinopThreadData data = {.a = a, .b = b, .result = result, .func = f};
+        mt_parallel_for(numel, 1, MT_MAX_THREADS, mt__binop_thread, &data);
 
         /* try to return early */
         return result;
@@ -905,19 +970,33 @@ MTDEF mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
     return result;
 }
 
+typedef struct {
+    mt_tensor *output;
+    mt_tensor *input;
+    mt_float (*func)(mt_float);
+} UnopThreadData;
+
+MTDEF void mt__unop_thread(int i, void *userdata) {
+    UnopThreadData *data  = (UnopThreadData *)userdata;
+    data->output->data[i] = data->func(data->input->data[i]);
+}
+
 MTDEF mt_tensor *mt__unop(mt_tensor *t, mt_float f(mt_float)) {
     mt_tensor *output = mt_tensor_alloc(t->shape, t->ndim);
-    for (int i = 0; i < mt_tensor_count_element(t); ++i) {
-        output->data[i] = f(t->data[i]);
-    }
+
+    UnopThreadData data = {.output = output, .input = t, .func = f};
+
+    mt_parallel_for(mt_tensor_count_element(t), 1, MT_MAX_THREADS,
+                    mt__unop_thread, &data);
+
     return output;
 }
 
 static mt_float mt__s_add(mt_float a, mt_float b) { return a + b; }
 #ifdef MT_USE_NEON
 // Specialized NEON binary operation for 2D tensors
-static mt_tensor *mt__add_neon_2d(mt_tensor *a, mt_tensor *b,
-                                  mt_float f(mt_float, mt_float)) {
+MTDEF mt_tensor *mt__add_neon_2d(mt_tensor *a, mt_tensor *b,
+                                 mt_float f(mt_float, mt_float)) {
     int a_rows = a->shape[0], a_cols = a->shape[1];
     int b_rows = b->shape[0], b_cols = b->shape[1];
     // Determine result shape
@@ -965,7 +1044,6 @@ static mt_tensor *mt__add_neon_2d(mt_tensor *a, mt_tensor *b,
     }
     // Case 2: b is a row vector (1xN) being broadcast
     else if (b_rows == 1 && a_rows == result_rows) {
-#pragma omp parallel for
         for (int i = 0; i < result_rows; i++) {
             // Prefetch next row
             if (i + 1 < result_rows) {
@@ -1013,7 +1091,6 @@ static mt_tensor *mt__add_neon_2d(mt_tensor *a, mt_tensor *b,
     }
     // Case 3: a is a row vector (1xN) being broadcast
     else if (a_rows == 1 && b_rows == result_rows) {
-#pragma omp parallel for
         for (int i = 0; i < result_rows; i++) {
             // Prefetch next row
             if (i + 1 < result_rows) {
