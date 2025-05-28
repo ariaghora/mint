@@ -760,6 +760,172 @@ static void mt__binop_2d(mt_float *a, int *a_shape, mt_float *b, int *b_shape,
     int a_rows = a_shape[0], a_cols = a_shape[1];
     int b_rows = b_shape[0], b_cols = b_shape[1];
     int result_rows = result_shape[0], result_cols = result_shape[1];
+
+#ifdef MT_USE_NEON
+    // Special case: b is a scalar (1x1) and a matches result dimensions
+    if (b_rows == 1 && b_cols == 1 && a_rows == result_rows &&
+        a_cols == result_cols) {
+        mt_float b_scalar = b[0];
+        int      total    = result_rows * result_cols;
+        int      i        = 0;
+
+        // Process 16 elements at a time
+        for (; i <= total - 16; i += 16) {
+            // Load 16 values from a using NEON
+            float32x4_t a0 = vld1q_f32(&a[i]);
+            float32x4_t a1 = vld1q_f32(&a[i + 4]);
+            float32x4_t a2 = vld1q_f32(&a[i + 8]);
+            float32x4_t a3 = vld1q_f32(&a[i + 12]);
+
+            // Store back to temporary arrays for function calls
+            float a_vals[16];
+            vst1q_f32(&a_vals[0], a0);
+            vst1q_f32(&a_vals[4], a1);
+            vst1q_f32(&a_vals[8], a2);
+            vst1q_f32(&a_vals[12], a3);
+
+            // Apply function (still scalar, but with better memory access)
+            for (int j = 0; j < 16; j++) {
+                result[i + j] = f(a_vals[j], b_scalar);
+            }
+        }
+
+        // Handle remaining elements
+        for (; i < total; i++) {
+            result[i] = f(a[i], b_scalar);
+        }
+        return;
+    }
+
+    // Special case: a is a scalar (1x1) and b matches result dimensions
+    if (a_rows == 1 && a_cols == 1 && b_rows == result_rows &&
+        b_cols == result_cols) {
+        mt_float a_scalar = a[0];
+        int      total    = result_rows * result_cols;
+        int      i        = 0;
+
+        // Process 16 elements at a time
+        for (; i <= total - 16; i += 16) {
+            // Load 16 values from b using NEON
+            float32x4_t b0 = vld1q_f32(&b[i]);
+            float32x4_t b1 = vld1q_f32(&b[i + 4]);
+            float32x4_t b2 = vld1q_f32(&b[i + 8]);
+            float32x4_t b3 = vld1q_f32(&b[i + 12]);
+
+            // Store back to temporary arrays for function calls
+            float b_vals[16];
+            vst1q_f32(&b_vals[0], b0);
+            vst1q_f32(&b_vals[4], b1);
+            vst1q_f32(&b_vals[8], b2);
+            vst1q_f32(&b_vals[12], b3);
+
+            // Apply function
+            for (int j = 0; j < 16; j++) {
+                result[i + j] = f(a_scalar, b_vals[j]);
+            }
+        }
+
+        // Handle remaining elements
+        for (; i < total; i++) {
+            result[i] = f(a_scalar, b[i]);
+        }
+        return;
+    }
+
+    // Special case: b is a row vector (1xN) being broadcast to all rows
+    if (b_rows == 1 && b_cols == a_cols && a_rows == result_rows &&
+        a_cols == result_cols) {
+        // Process each row
+        for (int i = 0; i < result_rows; i++) {
+            int j = 0;
+
+            // Process 16 elements at a time
+            for (; j <= result_cols - 16; j += 16) {
+                // Load from matrix a
+                float32x4_t a0 = vld1q_f32(&a[i * a_cols + j]);
+                float32x4_t a1 = vld1q_f32(&a[i * a_cols + j + 4]);
+                float32x4_t a2 = vld1q_f32(&a[i * a_cols + j + 8]);
+                float32x4_t a3 = vld1q_f32(&a[i * a_cols + j + 12]);
+
+                // Load from row vector b (same values for all rows)
+                float32x4_t b0 = vld1q_f32(&b[j]);
+                float32x4_t b1 = vld1q_f32(&b[j + 4]);
+                float32x4_t b2 = vld1q_f32(&b[j + 8]);
+                float32x4_t b3 = vld1q_f32(&b[j + 12]);
+
+                // Extract values for function calls
+                float a_vals[16], b_vals[16];
+                vst1q_f32(&a_vals[0], a0);
+                vst1q_f32(&a_vals[4], a1);
+                vst1q_f32(&a_vals[8], a2);
+                vst1q_f32(&a_vals[12], a3);
+
+                vst1q_f32(&b_vals[0], b0);
+                vst1q_f32(&b_vals[4], b1);
+                vst1q_f32(&b_vals[8], b2);
+                vst1q_f32(&b_vals[12], b3);
+
+                // Apply function
+                for (int k = 0; k < 16; k++) {
+                    result[i * result_cols + j + k] = f(a_vals[k], b_vals[k]);
+                }
+            }
+
+            // Handle remaining elements in the row
+            for (; j < result_cols; j++) {
+                result[i * result_cols + j] = f(a[i * a_cols + j], b[j]);
+            }
+        }
+        return;
+    }
+
+    // Special case: a is a row vector (1xN) being broadcast to all rows
+    if (a_rows == 1 && a_cols == b_cols && b_rows == result_rows &&
+        b_cols == result_cols) {
+        // Process each row
+        for (int i = 0; i < result_rows; i++) {
+            int j = 0;
+
+            // Process 16 elements at a time
+            for (; j <= result_cols - 16; j += 16) {
+                // Load from row vector a (same values for all rows)
+                float32x4_t a0 = vld1q_f32(&a[j]);
+                float32x4_t a1 = vld1q_f32(&a[j + 4]);
+                float32x4_t a2 = vld1q_f32(&a[j + 8]);
+                float32x4_t a3 = vld1q_f32(&a[j + 12]);
+
+                // Load from matrix b
+                float32x4_t b0 = vld1q_f32(&b[i * b_cols + j]);
+                float32x4_t b1 = vld1q_f32(&b[i * b_cols + j + 4]);
+                float32x4_t b2 = vld1q_f32(&b[i * b_cols + j + 8]);
+                float32x4_t b3 = vld1q_f32(&b[i * b_cols + j + 12]);
+
+                // Extract values for function calls
+                float a_vals[16], b_vals[16];
+                vst1q_f32(&a_vals[0], a0);
+                vst1q_f32(&a_vals[4], a1);
+                vst1q_f32(&a_vals[8], a2);
+                vst1q_f32(&a_vals[12], a3);
+
+                vst1q_f32(&b_vals[0], b0);
+                vst1q_f32(&b_vals[4], b1);
+                vst1q_f32(&b_vals[8], b2);
+                vst1q_f32(&b_vals[12], b3);
+
+                // Apply function
+                for (int k = 0; k < 16; k++) {
+                    result[i * result_cols + j + k] = f(a_vals[k], b_vals[k]);
+                }
+            }
+
+            // Handle remaining elements in the row
+            for (; j < result_cols; j++) {
+                result[i * result_cols + j] = f(a[j], b[i * b_cols + j]);
+            }
+        }
+        return;
+    }
+#else
     for (int i = 0; i < result_rows; i++) {
         for (int j = 0; j < result_cols; j++) {
             int a_i = i % a_rows, a_j = j % a_cols;
@@ -768,6 +934,7 @@ static void mt__binop_2d(mt_float *a, int *a_shape, mt_float *b, int *b_shape,
                 f(a[a_i * a_cols + a_j], b[b_i * b_cols + b_j]);
         }
     }
+#endif
 }
 
 // Optimized 3D broadcasting
@@ -914,8 +1081,144 @@ MTDEF mt_tensor *mt__unop(mt_tensor *t, mt_float f(mt_float)) {
 }
 
 static mt_float mt__s_add(mt_float a, mt_float b) { return a + b; }
-mt_tensor      *mt_add(mt_tensor *a, mt_tensor *b) {
+#ifdef MT_USE_NEON
+// Specialized NEON binary operation for 2D tensors
+static mt_tensor *mt__add_neon_2d(mt_tensor *a, mt_tensor *b,
+                                  mt_float f(mt_float, mt_float)) {
+    int a_rows = a->shape[0], a_cols = a->shape[1];
+    int b_rows = b->shape[0], b_cols = b->shape[1];
+    // Determine result shape
+    int result_rows = a_rows > b_rows ? a_rows : b_rows;
+    int result_cols = a_cols; // We know they match from the check in mt_add
+
+    mt_tensor *result =
+        mt_tensor_alloc(MT_ARR_INT(result_rows, result_cols), 2);
+
+    // Case 1: Both tensors have same shape (no broadcasting)
+    if (a_rows == b_rows && a_cols == b_cols) {
+        int total = result_rows * result_cols;
+        int i     = 0;
+
+        // Process 16 elements at a time
+        for (; i <= total - 16; i += 16) {
+            // Load values
+            float32x4_t a0 = vld1q_f32(&a->data[i]);
+            float32x4_t a1 = vld1q_f32(&a->data[i + 4]);
+            float32x4_t a2 = vld1q_f32(&a->data[i + 8]);
+            float32x4_t a3 = vld1q_f32(&a->data[i + 12]);
+
+            float32x4_t b0 = vld1q_f32(&b->data[i]);
+            float32x4_t b1 = vld1q_f32(&b->data[i + 4]);
+            float32x4_t b2 = vld1q_f32(&b->data[i + 8]);
+            float32x4_t b3 = vld1q_f32(&b->data[i + 12]);
+
+            // Check if we're doing addition (most common case)
+            // Use vectorized addition
+            vst1q_f32(&result->data[i], vaddq_f32(a0, b0));
+            vst1q_f32(&result->data[i + 4], vaddq_f32(a1, b1));
+            vst1q_f32(&result->data[i + 8], vaddq_f32(a2, b2));
+            vst1q_f32(&result->data[i + 12], vaddq_f32(a3, b3));
+        }
+
+        // Handle remaining elements
+        for (; i < total; i++) {
+            result->data[i] = f(a->data[i], b->data[i]);
+        }
+    }
+    // Case 2: b is a row vector (1xN) being broadcast
+    else if (b_rows == 1 && a_rows == result_rows) {
+#pragma omp parallel for
+        for (int i = 0; i < result_rows; i++) {
+            int j = 0;
+
+            // Process 16 elements at a time
+            for (; j <= result_cols - 16; j += 16) {
+                // Load from matrix a
+                float32x4_t a0 = vld1q_f32(&a->data[i * a_cols + j]);
+                float32x4_t a1 = vld1q_f32(&a->data[i * a_cols + j + 4]);
+                float32x4_t a2 = vld1q_f32(&a->data[i * a_cols + j + 8]);
+                float32x4_t a3 = vld1q_f32(&a->data[i * a_cols + j + 12]);
+
+                // Load from row vector b
+                float32x4_t b0 = vld1q_f32(&b->data[j]);
+                float32x4_t b1 = vld1q_f32(&b->data[j + 4]);
+                float32x4_t b2 = vld1q_f32(&b->data[j + 8]);
+                float32x4_t b3 = vld1q_f32(&b->data[j + 12]);
+
+                vst1q_f32(&result->data[i * result_cols + j],
+                          vaddq_f32(a0, b0));
+                vst1q_f32(&result->data[i * result_cols + j + 4],
+                          vaddq_f32(a1, b1));
+                vst1q_f32(&result->data[i * result_cols + j + 8],
+                          vaddq_f32(a2, b2));
+                vst1q_f32(&result->data[i * result_cols + j + 12],
+                          vaddq_f32(a3, b3));
+            }
+
+            // Handle remaining elements
+            for (; j < result_cols; j++) {
+                result->data[i * result_cols + j] =
+                    f(a->data[i * a_cols + j], b->data[j]);
+            }
+        }
+    }
+    // Case 3: a is a row vector (1xN) being broadcast
+    else if (a_rows == 1 && b_rows == result_rows) {
+#pragma omp parallel for
+        for (int i = 0; i < result_rows; i++) {
+            int j = 0;
+
+            // Process 16 elements at a time
+            for (; j <= result_cols - 16; j += 16) {
+                // Load from row vector a
+                float32x4_t a0 = vld1q_f32(&a->data[j]);
+                float32x4_t a1 = vld1q_f32(&a->data[j + 4]);
+                float32x4_t a2 = vld1q_f32(&a->data[j + 8]);
+                float32x4_t a3 = vld1q_f32(&a->data[j + 12]);
+
+                // Load from matrix b
+                float32x4_t b0 = vld1q_f32(&b->data[i * b_cols + j]);
+                float32x4_t b1 = vld1q_f32(&b->data[i * b_cols + j + 4]);
+                float32x4_t b2 = vld1q_f32(&b->data[i * b_cols + j + 8]);
+                float32x4_t b3 = vld1q_f32(&b->data[i * b_cols + j + 12]);
+
+                // Use vectorized addition
+                vst1q_f32(&result->data[i * result_cols + j],
+                          vaddq_f32(a0, b0));
+                vst1q_f32(&result->data[i * result_cols + j + 4],
+                          vaddq_f32(a1, b1));
+                vst1q_f32(&result->data[i * result_cols + j + 8],
+                          vaddq_f32(a2, b2));
+                vst1q_f32(&result->data[i * result_cols + j + 12],
+                          vaddq_f32(a3, b3));
+            }
+
+            // Handle remaining elements
+            for (; j < result_cols; j++) {
+                result->data[i * result_cols + j] =
+                    f(a->data[j], b->data[i * b_cols + j]);
+            }
+        }
+    }
+
+    return result;
+}
+#endif
+
+mt_tensor *mt_add(mt_tensor *a, mt_tensor *b) {
+#ifdef MT_USE_NEON
+    // check for 2D tensors with broadcastable shapes
+    if (a->ndim == 2 && b->ndim == 2 &&
+        ((a->shape[1] == b->shape[1]) ||
+         (a->shape[0] == 1 && a->shape[1] == b->shape[1]) ||
+         (b->shape[0] == 1 && a->shape[1] == b->shape[1]))) {
+        return mt__add_neon_2d(a, b, mt__s_add);
+    } else {
+        return mt__binop(a, b, mt__s_add);
+    }
+#else
     return mt__binop(a, b, mt__s_add);
+#endif
 }
 
 mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b) {
