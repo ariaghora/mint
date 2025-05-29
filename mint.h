@@ -13,6 +13,8 @@ the other libraries such as BLAS if needed.
   Some of notable features:
 - NumPy style broadcasting
 - BLAS backend (optional)
+- ARM NEON SIMD acceleration (optional, for ARM hardware)
+- Apple Accelerate framework acceleration (optional, for Apple Silicon)
 
 
 ****************************************************************************
@@ -143,6 +145,19 @@ for example, mt_tensor_load_image. If you enable this, then you must include
 matrix multiplication. You must also include `cblas.h` yourself right before
 including `mint.h`. You need to link your program with BLAS by adding -lblas
 compiler flag.
+
+  MT_USE_NEON
+  --------------------------------------------------------------------------
+  Whether or not to use ARM NEON SIMD intrinsics. ARM hardware could benefit
+from this. For Apple Silicon devices (M1/M2/M3), you can additionally define
+`#define MT_USE_APPLE_ACCELERATE` along with `MT_USE_NEON` to for additional
+speed-ups for several operations provided by Apple Accelerate framework.
+
+
+  MT_USE_APPLE_ACCELERATE
+  --------------------------------------------------------------------------
+  Whether or not to use Apple Accelerate framework. This option must be used
+alongside `MT_USE_NEON`.
 
 
   MT_USE_IM2COL_CONV
