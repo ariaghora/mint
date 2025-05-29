@@ -12,11 +12,10 @@
 #define MT_IMPLEMENTATION
 
 /*
-uncomment one of two lines below as needed
+uncomment one of lines below as needed
 */
 #define MT_USE_NEON
 // #define MT_USE_BLAS // make CFLAGS+="-lblas"
-// #define MT_USE_OPENMP
 #define MT_USE_PTHREAD
 
 #include "../../mint.h"

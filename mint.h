@@ -13,7 +13,6 @@ the other libraries such as BLAS if needed.
   Some of notable features:
 - NumPy style broadcasting
 - BLAS backend (optional)
-- OpenMP acceleration (optional)
 
 
 ****************************************************************************
@@ -386,10 +385,6 @@ MTDEF void              mt_layer_debug_info(mt_layer *l);
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
-#ifdef MT_USE_OPEN_MP
-#include <omp.h>
-#endif
 
 #ifdef MT_USE_NEON
 #include <arm_neon.h>
@@ -891,7 +886,6 @@ MTDEF mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
     if (b_numel == 1) {
         mt_tensor *result  = mt_tensor_alloc(a->shape, a->ndim);
         int        a_numel = mt_tensor_count_element(a);
-#pragma omp parallel for
         for (int i = 0; i < a_numel; ++i) {
             result->data[i] = f(a->data[i], b->data[0]);
         }
@@ -940,7 +934,6 @@ MTDEF mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
 
         int numel = mt_tensor_count_element(result);
 
-#pragma omp parallel for
         // TODO: optimize for special ndims, identic shape, and
         // tensor-scalar ops
         for (int i = 0; i < numel; i++) {
@@ -1213,7 +1206,6 @@ mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b) {
     int batch_size  = res->shape[0];
     int output_size = res->shape[1];
 
-#pragma omp parallel for collapse(2)
     for (int i = 0; i < batch_size; i++) {
         for (int j = 0; j < output_size; j++) {
             res->data[i * output_size + j] += b->data[j];
@@ -1335,7 +1327,6 @@ MTDEF void mt__im2col(const mt_float *data, const int C_in, const int H_in,
     const int channels_col = C_in * K_h * K_w;
     const int output_size  = H_out * W_out;
 
-#pragma omp parallel for collapse(2)
     for (int c = 0; c < channels_col; ++c) {
         for (int output_idx = 0; output_idx < output_size; ++output_idx) {
             int w_out = output_idx % W_out;
@@ -1414,7 +1405,6 @@ MTDEF mt_tensor *mt_convolve_2d_single(mt_tensor *x, mt_tensor *w, mt_tensor *b,
 
     // Reshape output and add bias
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C_out, H_out, W_out), 3);
-#pragma omp parallel for collapse(3)
     for (int c = 0; c < C_out; c++) {
         for (int h = 0; h < H_out; h++) {
             for (int w = 0; w < W_out; w++) {
@@ -1433,7 +1423,6 @@ MTDEF mt_tensor *mt_convolve_2d_single(mt_tensor *x, mt_tensor *w, mt_tensor *b,
 #else
     // Allocate output tensor
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C_out, H_out, W_out), 3);
-#pragma omp parallel for collapse(3)
     for (int c_out = 0; c_out < C_out; c_out++) {
         for (int h_out = 0; h_out < H_out; h_out++) {
             for (int w_out = 0; w_out < W_out; w_out++) {
@@ -1564,8 +1553,7 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
                 // Perform matrix multiplication
                 mt_tensor *output_2d = mt_matmul(reshaped_w, im2col);
 
-// Add bias and copy to output
-#pragma omp parallel for collapse(3)
+                // Add bias and copy to output
                 for (int c = 0; c < C_out_per_group; c++) {
                     for (int h = 0; h < H_out; h++) {
                         for (int w = 0; w < W_out; w++) {
@@ -1658,7 +1646,6 @@ mt_tensor *mt_global_avg_pool_2d(mt_tensor *x) {
     // Allocate output tensor of shape (N, C, 1, 1)
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(N, C, 1, 1), 4);
 
-#pragma omp parallel for collapse(2)
     // Perform global average pooling for each sample in the batch
     for (int n = 0; n < N; n++) {
         for (int c = 0; c < C; c++) {
@@ -1782,7 +1769,6 @@ mt_tensor *mt_instance_normalize(mt_tensor *t, mt_tensor *scale, mt_tensor *b,
     mt_tensor *output = mt_tensor_alloc(t->shape, t->ndim);
 
     for (int n = 0; n < N; n++) {
-#pragma omp parallel for
         for (int c = 0; c < C; c++) {
             // Compute mean
             mt_float sum = 0.0f;
@@ -2253,7 +2239,6 @@ MTDEF void mt__neon_sgemm(int m, int n, int k, mt_float alpha,
 static void mt__generic_sgemm(int m, int n, int k, mt_float alpha,
                               const mt_float *A, int lda, const mt_float *B,
                               int ldb, mt_float beta, mt_float *C, int ldc) {
-#pragma omp parallel for collapse(2)
     for (int i = 0; i < m; i += MATMUL_BLOCK_SIZE) {
         for (int j = 0; j < n; j += MATMUL_BLOCK_SIZE) {
             for (int l = 0; l < k; l += MATMUL_BLOCK_SIZE) {
@@ -2350,7 +2335,6 @@ mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int *pads) {
     // Allocate output tensor
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(N, C, H_out, W_out), 4);
 
-#pragma omp parallel for collapse(4)
     for (int n = 0; n < N; n++) {
         for (int c = 0; c < C; c++) {
             for (int h_out = 0; h_out < H_out; h_out++) {
@@ -2654,7 +2638,6 @@ MTDEF mt_tensor *mt__permute_2d(mt_tensor *input, const int *dims) {
     if (dims[0] == 0 && dims[1] == 1) {
         memcpy(output->data, input->data, h * w * sizeof(mt_float));
     } else {
-#pragma omp parallel for schedule(static)
         for (int i = 0; i < w; i++) {
             for (int j = 0; j < h; j++) {
                 output->data[i * h + j] = input->data[j * w + i];
@@ -2832,7 +2815,6 @@ MTDEF mt_tensor *mt_reduce(mt_tensor *input, int axis, mt_reduce_func reduce_op,
     for (int i = axis + 1; i < input->ndim; i++)
         inner_size *= input->shape[i];
 
-#pragma omp parallel for collapse(2)
     for (int i = 0; i < outer_size; i++) {
         for (int j = 0; j < inner_size; j++) {
             mt_float result = init_val;
@@ -2893,8 +2875,7 @@ MTDEF void mt_relu_inplace(mt_tensor *t) {
         data[i] = data[i] > 0 ? data[i] : 0;
     }
 #else
-// Original implementation for non-NEON platforms
-#pragma omp parallel for simd schedule(static)
+    // Original implementation for non-NEON platforms
     for (int i = 0; i < n; ++i) {
         data[i] = data[i] > 0 ? data[i] : 0;
     }
@@ -2905,7 +2886,6 @@ void mt_sigmoid_inplace(mt_tensor *t) {
     int       n    = mt_tensor_count_element(t);
     mt_float *data = t->data;
 
-#pragma omp parallel for simd schedule(static)
     for (int i = 0; i < n; ++i) {
         data[i] = 1 / (1 + expf(-data[i]));
     }
