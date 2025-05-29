@@ -1,7 +1,6 @@
 CC ?= gcc
 
-CFLAGS = -Wall -Wextra -g -O3 -pedantic -lpthread
-# CFLAGS = -Wall -Wextra -g -O3 -pedantic -ffast-math -Xclang -fopenmp -L/opt/homebrew/opt/libomp/lib -I/opt/homebrew/opt/libomp/include -lomp 
+CFLAGS = -Wall -Wextra -g -O3 -pedantic 
 
 TARGET = resnet-18
 SRC = $(TARGET).c
