@@ -423,8 +423,12 @@ MTDEF void              mt_layer_debug_info(mt_layer *l);
 #define MT_FREE(sz)   free(sz)
 #endif
 
+#if !defined(MAX)
 #define MAX(a, b) (a > b ? a : b)
+#endif
+#if !defined(MIN)
 #define MIN(a, b) (a < b ? a : b)
+#endif
 
 typedef struct mt_tensor {
     mt_float *data;
@@ -688,6 +692,7 @@ MTDEF void mt_parallel_for(int count, int increment, int num_threads,
 #else
 MTDEF void mt_parallel_for(int count, int increment, int threads,
                            void (*fn)(int, void *), void *user) {
+    (void)threads;
     for (int i = 0; i < count; i += increment)
         fn(i, user);
 }
