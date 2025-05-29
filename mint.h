@@ -388,6 +388,9 @@ MTDEF void              mt_layer_debug_info(mt_layer *l);
 
 #ifdef MT_USE_NEON
 #include <arm_neon.h>
+#ifdef MT_USE_APPLE_ACCELERATE
+#include <Accelerate/Accelerate.h>
+#endif
 #endif
 
 #ifdef MT_USE_BLAS
@@ -2031,6 +2034,10 @@ MTDEF void mt__neon_sgemm_row_thread(int i, void *userdata) {
 MTDEF void mt__neon_sgemm(int m, int n, int k, mt_float alpha,
                           const mt_float *A, int lda, const mt_float *B,
                           int ldb, mt_float beta, mt_float *C, int ldc) {
+#ifdef MT_USE_APPLE_ACCELERATE
+    vDSP_mmul(A, 1, B, 1, C, 1, m, n, k);
+    return;
+#else
     // Apply beta scaling to C
     if (beta != 1.0f) {
         for (int i = 0; i < m; i++) {
@@ -2057,6 +2064,7 @@ MTDEF void mt__neon_sgemm(int m, int n, int k, mt_float alpha,
     mt_parallel_for(num_threads, 1, num_threads, mt__neon_sgemm_row_thread,
                     &data);
     return;
+#endif
 }
 #endif
 
