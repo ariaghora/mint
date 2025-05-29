@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
             arg_max = i;
         }
     }
-    printf("class label: %s\n", class_labels[arg_max]);
+    printf("Predicted class: %s\n", class_labels[arg_max]);
 
     mt_tensor_free(output);
     mt_tensor_free(image_resized);

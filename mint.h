@@ -1922,7 +1922,6 @@ MTDEF void mt__neon_sgemm_row_thread(int i, void *userdata) {
             float32x4_t c20 = vdupq_n_f32(0);
             float32x4_t c30 = vdupq_n_f32(0);
 
-            // Unroll the inner loop for better instruction scheduling
             for (int l = 0; l < k; l += 4) {
                 // Prefetch next chunks of the inner dimension
                 if (l + 8 < k) {
