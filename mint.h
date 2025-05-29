@@ -13,7 +13,6 @@ the other libraries such as BLAS if needed.
   Some of notable features:
 - NumPy style broadcasting
 - BLAS backend (optional)
-- OpenMP acceleration (optional)
 
 
 ****************************************************************************
@@ -387,16 +386,19 @@ MTDEF void              mt_layer_debug_info(mt_layer *l);
 #include <string.h>
 #include <time.h>
 
-#ifdef MT_USE_OPEN_MP
-#include <omp.h>
-#endif
-
 #ifdef MT_USE_NEON
 #include <arm_neon.h>
 #endif
 
 #ifdef MT_USE_BLAS
 #include <cblas.h>
+#endif
+
+#ifdef MT_USE_PTHREAD
+#include <pthread.h>
+#endif
+#ifndef MT_MAX_THREADS
+#define MT_MAX_THREADS 32
 #endif
 
 #define MAX_LAYER_COUNT             1000
@@ -641,6 +643,53 @@ typedef struct mt_model {
         exit(1);                                                               \
     } while (0)
 
+#ifdef MT_USE_PTHREAD
+typedef struct {
+    int start, end;
+    void (*func)(int i, void *userdata);
+    void *userdata;
+} Job;
+
+void *thread_entry(void *arg) {
+    Job *job = (Job *)arg;
+    for (int i = job->start; i < job->end; ++i)
+        job->func(i, job->userdata);
+    return NULL;
+}
+
+// Parallel for loop
+MTDEF void mt_parallel_for(int count, int increment, int num_threads,
+                           void (*func)(int i, void *userdata),
+                           void *userdata) {
+    pthread_t threads[MT_MAX_THREADS];
+    Job       jobs[MT_MAX_THREADS];
+    int       chunk = (count + num_threads - 1) / num_threads;
+
+    for (int t = 0; t < num_threads; t += increment) {
+        int start = t * chunk;
+        int end   = start + chunk;
+        if (start >= count)
+            break;
+        if (end > count)
+            end = count;
+
+        jobs[t] = (Job){
+            .start = start, .end = end, .func = func, .userdata = userdata};
+        pthread_create(&threads[t], NULL, thread_entry, &jobs[t]);
+    }
+
+    for (int t = 0; t < num_threads; ++t)
+        if (t * chunk < count)
+            pthread_join(threads[t], NULL);
+}
+#else
+MTDEF void mt_parallel_for(int count, int increment, int threads,
+                           void (*fn)(int, void *), void *user) {
+    for (int i = 0; i < count; i += increment)
+        fn(i, user);
+}
+#endif
+
 mt_tensor *mt_tensor_clone(mt_tensor *t) {
     return mt_tensor_alloc_values(t->shape, t->ndim, t->data);
 }
@@ -792,6 +841,18 @@ static void mt__binop_3d(mt_float *a, int *a_shape, mt_float *b, int *b_shape,
     }
 }
 
+typedef struct {
+    mt_tensor *a;
+    mt_tensor *b;
+    mt_tensor *result;
+    mt_float (*func)(mt_float, mt_float);
+} BinopThreadData;
+
+MTDEF void mt__binop_thread(int i, void *userdata) {
+    BinopThreadData *data = (BinopThreadData *)userdata;
+    data->result->data[i] = data->func(data->a->data[i], data->b->data[i]);
+}
+
 // General binary operator.
 // NOTE(Aria): This is meant to be used internally.
 MTDEF mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
@@ -812,10 +873,9 @@ MTDEF mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
     if ((a->ndim == b->ndim) && same_shape) {
         mt_tensor *result = mt_tensor_alloc(a->shape, a->ndim);
         int        numel  = mt_tensor_count_element(a);
-#pragma omp parallel for
-        for (int i = 0; i < numel; ++i) {
-            result->data[i] = f(a->data[i], b->data[i]);
-        }
+
+        BinopThreadData data = {.a = a, .b = b, .result = result, .func = f};
+        mt_parallel_for(numel, 1, MT_MAX_THREADS, mt__binop_thread, &data);
 
         /* try to return early */
         return result;
@@ -826,7 +886,6 @@ MTDEF mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
     if (b_numel == 1) {
         mt_tensor *result  = mt_tensor_alloc(a->shape, a->ndim);
         int        a_numel = mt_tensor_count_element(a);
-#pragma omp parallel for
         for (int i = 0; i < a_numel; ++i) {
             result->data[i] = f(a->data[i], b->data[0]);
         }
@@ -875,7 +934,6 @@ MTDEF mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
 
         int numel = mt_tensor_count_element(result);
 
-#pragma omp parallel for
         // TODO: optimize for special ndims, identic shape, and
         // tensor-scalar ops
         for (int i = 0; i < numel; i++) {
@@ -905,19 +963,72 @@ MTDEF mt_tensor *mt__binop(mt_tensor *a, mt_tensor *b,
     return result;
 }
 
+typedef struct {
+    mt_tensor *output;
+    mt_tensor *input;
+    mt_float (*func)(mt_float);
+} UnopThreadData;
+
+MTDEF void mt__unop_thread(int i, void *userdata) {
+    UnopThreadData *data  = (UnopThreadData *)userdata;
+    data->output->data[i] = data->func(data->input->data[i]);
+}
+
 MTDEF mt_tensor *mt__unop(mt_tensor *t, mt_float f(mt_float)) {
     mt_tensor *output = mt_tensor_alloc(t->shape, t->ndim);
-    for (int i = 0; i < mt_tensor_count_element(t); ++i) {
-        output->data[i] = f(t->data[i]);
-    }
+
+    UnopThreadData data = {.output = output, .input = t, .func = f};
+
+    mt_parallel_for(mt_tensor_count_element(t), 1, MT_MAX_THREADS,
+                    mt__unop_thread, &data);
+
     return output;
 }
 
 static mt_float mt__s_add(mt_float a, mt_float b) { return a + b; }
 #ifdef MT_USE_NEON
+
+struct AddNeon2dCase1ThreadData {
+    int        last;
+    int        total;
+    mt_tensor *a;
+    mt_tensor *b;
+    mt_tensor *result;
+    mt_float (*func)(mt_float, mt_float);
+};
+
+MTDEF void mt__add_neon_2d_case1_thread(int i, void *userdata) {
+    struct AddNeon2dCase1ThreadData *data =
+        (struct AddNeon2dCase1ThreadData *)userdata;
+
+    // Prefetch next chunks
+    if (i + 32 < data->total) {
+        __builtin_prefetch(&data->a->data[i + 32], 0, 3);
+        __builtin_prefetch(&data->b->data[i + 32], 0, 3);
+    }
+
+    // Load values
+    float32x4_t a0 = vld1q_f32(&data->a->data[i]);
+    float32x4_t a1 = vld1q_f32(&data->a->data[i + 4]);
+    float32x4_t a2 = vld1q_f32(&data->a->data[i + 8]);
+    float32x4_t a3 = vld1q_f32(&data->a->data[i + 12]);
+
+    float32x4_t b0 = vld1q_f32(&data->b->data[i]);
+    float32x4_t b1 = vld1q_f32(&data->b->data[i + 4]);
+    float32x4_t b2 = vld1q_f32(&data->b->data[i + 8]);
+    float32x4_t b3 = vld1q_f32(&data->b->data[i + 12]);
+
+    // Use vectorized addition
+    vst1q_f32(&data->result->data[i], vaddq_f32(a0, b0));
+    vst1q_f32(&data->result->data[i + 4], vaddq_f32(a1, b1));
+    vst1q_f32(&data->result->data[i + 8], vaddq_f32(a2, b2));
+    vst1q_f32(&data->result->data[i + 12], vaddq_f32(a3, b3));
+    data->last = i + 16;
+}
+
 // Specialized NEON binary operation for 2D tensors
-static mt_tensor *mt__add_neon_2d(mt_tensor *a, mt_tensor *b,
-                                  mt_float f(mt_float, mt_float)) {
+MTDEF mt_tensor *mt__add_neon_2d(mt_tensor *a, mt_tensor *b,
+                                 mt_float f(mt_float, mt_float)) {
     int a_rows = a->shape[0], a_cols = a->shape[1];
     int b_rows = b->shape[0], b_cols = b->shape[1];
     // Determine result shape
@@ -930,10 +1041,13 @@ static mt_tensor *mt__add_neon_2d(mt_tensor *a, mt_tensor *b,
     // Case 1: Both tensors have same shape (no broadcasting)
     if (a_rows == b_rows && a_cols == b_cols) {
         int total = result_rows * result_cols;
-        int i     = 0;
+        int last  = 0;
+
+        // NOTE(Aria): This is slower than the loop below.
+        // mt_parallel_for(total, 16, 8, mt__add_neon_2d_case1_thread, &data);
 
         // Process 16 elements at a time
-        for (; i <= total - 16; i += 16) {
+        for (int i = 0; i <= total - 16; i += 16) {
             // Prefetch next chunks
             if (i + 32 < total) {
                 __builtin_prefetch(&a->data[i + 32], 0, 3);
@@ -956,16 +1070,17 @@ static mt_tensor *mt__add_neon_2d(mt_tensor *a, mt_tensor *b,
             vst1q_f32(&result->data[i + 4], vaddq_f32(a1, b1));
             vst1q_f32(&result->data[i + 8], vaddq_f32(a2, b2));
             vst1q_f32(&result->data[i + 12], vaddq_f32(a3, b3));
+
+            last = i;
         }
 
         // Handle remaining elements
-        for (; i < total; i++) {
-            result->data[i] = f(a->data[i], b->data[i]);
+        for (; last < total; last++) {
+            result->data[last] = f(a->data[last], b->data[last]);
         }
     }
     // Case 2: b is a row vector (1xN) being broadcast
     else if (b_rows == 1 && a_rows == result_rows) {
-#pragma omp parallel for
         for (int i = 0; i < result_rows; i++) {
             // Prefetch next row
             if (i + 1 < result_rows) {
@@ -1013,7 +1128,6 @@ static mt_tensor *mt__add_neon_2d(mt_tensor *a, mt_tensor *b,
     }
     // Case 3: a is a row vector (1xN) being broadcast
     else if (a_rows == 1 && b_rows == result_rows) {
-#pragma omp parallel for
         for (int i = 0; i < result_rows; i++) {
             // Prefetch next row
             if (i + 1 < result_rows) {
@@ -1092,7 +1206,6 @@ mt_tensor *mt_affine(mt_tensor *x, mt_tensor *w, mt_tensor *b) {
     int batch_size  = res->shape[0];
     int output_size = res->shape[1];
 
-#pragma omp parallel for collapse(2)
     for (int i = 0; i < batch_size; i++) {
         for (int j = 0; j < output_size; j++) {
             res->data[i * output_size + j] += b->data[j];
@@ -1214,7 +1327,6 @@ MTDEF void mt__im2col(const mt_float *data, const int C_in, const int H_in,
     const int channels_col = C_in * K_h * K_w;
     const int output_size  = H_out * W_out;
 
-#pragma omp parallel for collapse(2)
     for (int c = 0; c < channels_col; ++c) {
         for (int output_idx = 0; output_idx < output_size; ++output_idx) {
             int w_out = output_idx % W_out;
@@ -1293,7 +1405,6 @@ MTDEF mt_tensor *mt_convolve_2d_single(mt_tensor *x, mt_tensor *w, mt_tensor *b,
 
     // Reshape output and add bias
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C_out, H_out, W_out), 3);
-#pragma omp parallel for collapse(3)
     for (int c = 0; c < C_out; c++) {
         for (int h = 0; h < H_out; h++) {
             for (int w = 0; w < W_out; w++) {
@@ -1312,7 +1423,6 @@ MTDEF mt_tensor *mt_convolve_2d_single(mt_tensor *x, mt_tensor *w, mt_tensor *b,
 #else
     // Allocate output tensor
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(C_out, H_out, W_out), 3);
-#pragma omp parallel for collapse(3)
     for (int c_out = 0; c_out < C_out; c_out++) {
         for (int h_out = 0; h_out < H_out; h_out++) {
             for (int w_out = 0; w_out < W_out; w_out++) {
@@ -1443,8 +1553,7 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
                 // Perform matrix multiplication
                 mt_tensor *output_2d = mt_matmul(reshaped_w, im2col);
 
-// Add bias and copy to output
-#pragma omp parallel for collapse(3)
+                // Add bias and copy to output
                 for (int c = 0; c < C_out_per_group; c++) {
                     for (int h = 0; h < H_out; h++) {
                         for (int w = 0; w < W_out; w++) {
@@ -1537,7 +1646,6 @@ mt_tensor *mt_global_avg_pool_2d(mt_tensor *x) {
     // Allocate output tensor of shape (N, C, 1, 1)
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(N, C, 1, 1), 4);
 
-#pragma omp parallel for collapse(2)
     // Perform global average pooling for each sample in the batch
     for (int n = 0; n < N; n++) {
         for (int c = 0; c < C; c++) {
@@ -1661,7 +1769,6 @@ mt_tensor *mt_instance_normalize(mt_tensor *t, mt_tensor *scale, mt_tensor *b,
     mt_tensor *output = mt_tensor_alloc(t->shape, t->ndim);
 
     for (int n = 0; n < N; n++) {
-#pragma omp parallel for
         for (int c = 0; c < C; c++) {
             // Compute mean
             mt_float sum = 0.0f;
@@ -1741,9 +1848,246 @@ mt_tensor *mt_local_response_norm(mt_tensor *t, int size, mt_float alpha,
 }
 
 #ifdef MT_USE_NEON
-static void mt__neon_sgemm(int m, int n, int k, float alpha, const float *A,
-                           int lda, const float *B, int ldb, float beta,
-                           float *C, int ldc) {
+struct NeonSgemmRowThreadData {
+    int             m;
+    int             n;
+    int             k;
+    mt_float        alpha;
+    const mt_float *A;
+    const mt_float *B;
+    mt_float       *C;
+    int             lda;
+    int             ldb;
+    int             ldc;
+};
+
+MTDEF void mt__neon_sgemm_row_thread(int i, void *userdata) {
+    struct NeonSgemmRowThreadData *data =
+        (struct NeonSgemmRowThreadData *)userdata;
+
+    int             m     = data->m;
+    int             n     = data->n;
+    int             k     = data->k;
+    mt_float        alpha = data->alpha;
+    const mt_float *A     = data->A;
+    const mt_float *B     = data->B;
+    mt_float       *C     = data->C;
+    int             lda   = data->lda;
+    int             ldb   = data->ldb;
+    int             ldc   = data->ldc;
+
+    // Each thread handles a block of rows
+    int block_size = (m + MT_MAX_THREADS - 1) / MT_MAX_THREADS;
+    int start_row  = i * block_size;
+    int end_row    = (start_row + block_size < m) ? start_row + block_size : m;
+
+    // Process assigned rows
+    for (int ii = start_row; ii < end_row; ii += 4) {
+        // Calculate how many rows we can process (handle edge case)
+        int rows_left = end_row - ii;
+        int row_block = (rows_left >= 4) ? 4 : rows_left;
+
+        for (int j = 0; j < n; j += 4) {
+            // Prefetch next tiles of B
+            if (j + 8 < n) {
+                __builtin_prefetch(&B[0 * ldb + (j + 8)], 0, 3);
+            }
+
+            // Initialize accumulators
+            float32x4_t c00 = vdupq_n_f32(0);
+            float32x4_t c10 = vdupq_n_f32(0);
+            float32x4_t c20 = vdupq_n_f32(0);
+            float32x4_t c30 = vdupq_n_f32(0);
+
+            // Unroll the inner loop for better instruction scheduling
+            for (int l = 0; l < k; l += 4) {
+                // Prefetch next chunks of the inner dimension
+                if (l + 8 < k) {
+                    __builtin_prefetch(&A[ii * lda + (l + 8)], 0, 3);
+                    __builtin_prefetch(&B[(l + 8) * ldb + j], 0, 3);
+                }
+
+                // Process 4 elements of k dimension at once when possible
+                if (l + 3 < k) {
+                    // Load 4 rows of B (each 4 elements wide)
+                    float32x4_t b0 = vld1q_f32(&B[(l + 0) * ldb + j]);
+                    float32x4_t b1 = vld1q_f32(&B[(l + 1) * ldb + j]);
+                    float32x4_t b2 = vld1q_f32(&B[(l + 2) * ldb + j]);
+                    float32x4_t b3 = vld1q_f32(&B[(l + 3) * ldb + j]);
+
+                    // For each row of A, accumulate against all 4 rows of B
+                    // Row 0 of A
+                    if (row_block > 0) {
+                        float32x4_t a0_0 = vdupq_n_f32(A[ii * lda + (l + 0)]);
+                        float32x4_t a0_1 = vdupq_n_f32(A[ii * lda + (l + 1)]);
+                        float32x4_t a0_2 = vdupq_n_f32(A[ii * lda + (l + 2)]);
+                        float32x4_t a0_3 = vdupq_n_f32(A[ii * lda + (l + 3)]);
+                        c00              = vmlaq_f32(c00, a0_0, b0);
+                        c00              = vmlaq_f32(c00, a0_1, b1);
+                        c00              = vmlaq_f32(c00, a0_2, b2);
+                        c00              = vmlaq_f32(c00, a0_3, b3);
+                    }
+
+                    // Row 1 of A
+                    if (row_block > 1) {
+                        float32x4_t a1_0 =
+                            vdupq_n_f32(A[(ii + 1) * lda + (l + 0)]);
+                        float32x4_t a1_1 =
+                            vdupq_n_f32(A[(ii + 1) * lda + (l + 1)]);
+                        float32x4_t a1_2 =
+                            vdupq_n_f32(A[(ii + 1) * lda + (l + 2)]);
+                        float32x4_t a1_3 =
+                            vdupq_n_f32(A[(ii + 1) * lda + (l + 3)]);
+                        c10 = vmlaq_f32(c10, a1_0, b0);
+                        c10 = vmlaq_f32(c10, a1_1, b1);
+                        c10 = vmlaq_f32(c10, a1_2, b2);
+                        c10 = vmlaq_f32(c10, a1_3, b3);
+                    }
+
+                    // Row 2 of A
+                    if (row_block > 2) {
+                        float32x4_t a2_0 =
+                            vdupq_n_f32(A[(ii + 2) * lda + (l + 0)]);
+                        float32x4_t a2_1 =
+                            vdupq_n_f32(A[(ii + 2) * lda + (l + 1)]);
+                        float32x4_t a2_2 =
+                            vdupq_n_f32(A[(ii + 2) * lda + (l + 2)]);
+                        float32x4_t a2_3 =
+                            vdupq_n_f32(A[(ii + 2) * lda + (l + 3)]);
+                        c20 = vmlaq_f32(c20, a2_0, b0);
+                        c20 = vmlaq_f32(c20, a2_1, b1);
+                        c20 = vmlaq_f32(c20, a2_2, b2);
+                        c20 = vmlaq_f32(c20, a2_3, b3);
+                    }
+
+                    // Row 3 of A
+                    if (row_block > 3) {
+                        float32x4_t a3_0 =
+                            vdupq_n_f32(A[(ii + 3) * lda + (l + 0)]);
+                        float32x4_t a3_1 =
+                            vdupq_n_f32(A[(ii + 3) * lda + (l + 1)]);
+                        float32x4_t a3_2 =
+                            vdupq_n_f32(A[(ii + 3) * lda + (l + 2)]);
+                        float32x4_t a3_3 =
+                            vdupq_n_f32(A[(ii + 3) * lda + (l + 3)]);
+                        c30 = vmlaq_f32(c30, a3_0, b0);
+                        c30 = vmlaq_f32(c30, a3_1, b1);
+                        c30 = vmlaq_f32(c30, a3_2, b2);
+                        c30 = vmlaq_f32(c30, a3_3, b3);
+                    }
+                } else {
+                    // Handle remaining k iterations one at a time
+                    for (int ll = l; ll < k && ll < l + 4; ll++) {
+                        float32x4_t b0 = vld1q_f32(&B[ll * ldb + j]);
+
+                        if (row_block > 0) {
+                            float32x4_t a0 = vdupq_n_f32(A[ii * lda + ll]);
+                            c00            = vmlaq_f32(c00, a0, b0);
+                        }
+
+                        if (row_block > 1) {
+                            float32x4_t a1 =
+                                vdupq_n_f32(A[(ii + 1) * lda + ll]);
+                            c10 = vmlaq_f32(c10, a1, b0);
+                        }
+
+                        if (row_block > 2) {
+                            float32x4_t a2 =
+                                vdupq_n_f32(A[(ii + 2) * lda + ll]);
+                            c20 = vmlaq_f32(c20, a2, b0);
+                        }
+
+                        if (row_block > 3) {
+                            float32x4_t a3 =
+                                vdupq_n_f32(A[(ii + 3) * lda + ll]);
+                            c30 = vmlaq_f32(c30, a3, b0);
+                        }
+                    }
+                }
+            }
+
+            // Apply alpha scaling
+            c00 = vmulq_n_f32(c00, alpha);
+            c10 = vmulq_n_f32(c10, alpha);
+            c20 = vmulq_n_f32(c20, alpha);
+            c30 = vmulq_n_f32(c30, alpha);
+
+            // Calculate column limits
+            int cols_left = n - j;
+            int col_block = (cols_left >= 4) ? 4 : cols_left;
+
+            // Store results using fixed indices for vgetq_lane_f32
+            // Row 0
+            if (row_block > 0) {
+                mt_float temp_arr[4];
+                vst1q_f32(temp_arr, c00);
+                for (int jj = 0; jj < col_block; jj++) {
+                    C[ii * ldc + j + jj] += temp_arr[jj];
+                }
+            }
+
+            // Row 1
+            if (row_block > 1) {
+                mt_float temp_arr[4];
+                vst1q_f32(temp_arr, c10);
+                for (int jj = 0; jj < col_block; jj++) {
+                    C[(ii + 1) * ldc + j + jj] += temp_arr[jj];
+                }
+            }
+
+            // Row 2
+            if (row_block > 2) {
+                mt_float temp_arr[4];
+                vst1q_f32(temp_arr, c20);
+                for (int jj = 0; jj < col_block; jj++) {
+                    C[(ii + 2) * ldc + j + jj] += temp_arr[jj];
+                }
+            }
+
+            // Row 3
+            if (row_block > 3) {
+                mt_float temp_arr[4];
+                vst1q_f32(temp_arr, c30);
+                for (int jj = 0; jj < col_block; jj++) {
+                    C[(ii + 3) * ldc + j + jj] += temp_arr[jj];
+                }
+            }
+        }
+    }
+}
+
+MTDEF void mt__neon_sgemm(int m, int n, int k, mt_float alpha,
+                          const mt_float *A, int lda, const mt_float *B,
+                          int ldb, mt_float beta, mt_float *C, int ldc) {
+    // Apply beta scaling to C
+    if (beta != 1.0f) {
+        for (int i = 0; i < m; i++) {
+            for (int j = 0; j < n; j++) {
+                C[i * ldc + j] *= beta;
+            }
+        }
+    }
+
+#ifdef MT_USE_PTHREAD
+    // Use threaded version if we have enough work
+    int                           num_threads = MT_MAX_THREADS;
+    struct NeonSgemmRowThreadData data        = {.m     = m,
+                                                 .n     = n,
+                                                 .k     = k,
+                                                 .alpha = alpha,
+                                                 .A     = A,
+                                                 .B     = B,
+                                                 .C     = C,
+                                                 .lda   = lda,
+                                                 .ldb   = ldb,
+                                                 .ldc   = ldc};
+
+    mt_parallel_for(num_threads, 1, num_threads, mt__neon_sgemm_row_thread,
+                    &data);
+    return;
+#endif
+
+    // single-threaded fallback
     for (int i = 0; i < m; i += 4) {
         for (int j = 0; j < n; j += 4) {
             // Prefetch next tiles of A and B
@@ -1870,7 +2214,7 @@ static void mt__neon_sgemm(int m, int n, int k, float alpha, const float *A,
             int rem_m = (m - i) < 4 ? (m - i) : 4;
             int rem_n = (n - j) < 4 ? (n - j) : 4;
 
-            // Store results with beta scaling
+            // Store results
             float32x4_t result[4] = {c00, c10, c20, c30};
             for (int ii = 0; ii < rem_m; ii++) {
                 // Prefetch next C row
@@ -1878,21 +2222,11 @@ static void mt__neon_sgemm(int m, int n, int k, float alpha, const float *A,
                     __builtin_prefetch(&C[(i + ii + 1) * ldc + j], 0, 3);
                 }
 
-                float32x4_t c    = vld1q_f32(&C[(i + ii) * ldc + j]);
-                float32x4_t temp = result[ii];
+                mt_float temp_arr[4];
+                vst1q_f32(temp_arr, result[ii]);
 
-                if (beta != 0.0f) {
-                    temp = vmlaq_n_f32(temp, c, beta);
-                }
-
-                if (rem_n == 4) {
-                    vst1q_f32(&C[(i + ii) * ldc + j], temp);
-                } else {
-                    float temp_arr[4];
-                    vst1q_f32(temp_arr, temp);
-                    for (int jj = 0; jj < rem_n; jj++) {
-                        C[(i + ii) * ldc + j + jj] = temp_arr[jj];
-                    }
+                for (int jj = 0; jj < rem_n; jj++) {
+                    C[(i + ii) * ldc + j + jj] += temp_arr[jj];
                 }
             }
         }
@@ -1902,10 +2236,9 @@ static void mt__neon_sgemm(int m, int n, int k, float alpha, const float *A,
 
 #if !defined(MT_USE_NEON) && !defined(MT_USE_BLAS)
 // Generic SGEMM implementation
-static void mt__generic_sgemm(int m, int n, int k, float alpha, const float *A,
-                              int lda, const float *B, int ldb, float beta,
-                              float *C, int ldc) {
-#pragma omp parallel for collapse(2)
+static void mt__generic_sgemm(int m, int n, int k, mt_float alpha,
+                              const mt_float *A, int lda, const mt_float *B,
+                              int ldb, mt_float beta, mt_float *C, int ldc) {
     for (int i = 0; i < m; i += MATMUL_BLOCK_SIZE) {
         for (int j = 0; j < n; j += MATMUL_BLOCK_SIZE) {
             for (int l = 0; l < k; l += MATMUL_BLOCK_SIZE) {
@@ -1918,7 +2251,7 @@ static void mt__generic_sgemm(int m, int n, int k, float alpha, const float *A,
 
                 for (int ii = i; ii < i_end; ii++) {
                     for (int jj = j; jj < j_end; jj++) {
-                        float sum = 0.0f;
+                        mt_float sum = 0.0f;
                         for (int ll = l; ll < l_end; ll++) {
                             sum += A[ii * lda + ll] * B[ll * ldb + jj];
                         }
@@ -2002,7 +2335,6 @@ mt_tensor *mt_maxpool_2d(mt_tensor *x, int kernel_size, int stride, int *pads) {
     // Allocate output tensor
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(N, C, H_out, W_out), 4);
 
-#pragma omp parallel for collapse(4)
     for (int n = 0; n < N; n++) {
         for (int c = 0; c < C; c++) {
             for (int h_out = 0; h_out < H_out; h_out++) {
@@ -2306,7 +2638,6 @@ MTDEF mt_tensor *mt__permute_2d(mt_tensor *input, const int *dims) {
     if (dims[0] == 0 && dims[1] == 1) {
         memcpy(output->data, input->data, h * w * sizeof(mt_float));
     } else {
-#pragma omp parallel for schedule(static)
         for (int i = 0; i < w; i++) {
             for (int j = 0; j < h; j++) {
                 output->data[i * h + j] = input->data[j * w + i];
@@ -2484,7 +2815,6 @@ MTDEF mt_tensor *mt_reduce(mt_tensor *input, int axis, mt_reduce_func reduce_op,
     for (int i = axis + 1; i < input->ndim; i++)
         inner_size *= input->shape[i];
 
-#pragma omp parallel for collapse(2)
     for (int i = 0; i < outer_size; i++) {
         for (int j = 0; j < inner_size; j++) {
             mt_float result = init_val;
@@ -2545,8 +2875,7 @@ MTDEF void mt_relu_inplace(mt_tensor *t) {
         data[i] = data[i] > 0 ? data[i] : 0;
     }
 #else
-// Original implementation for non-NEON platforms
-#pragma omp parallel for simd schedule(static)
+    // Original implementation for non-NEON platforms
     for (int i = 0; i < n; ++i) {
         data[i] = data[i] > 0 ? data[i] : 0;
     }
@@ -2557,7 +2886,6 @@ void mt_sigmoid_inplace(mt_tensor *t) {
     int       n    = mt_tensor_count_element(t);
     mt_float *data = t->data;
 
-#pragma omp parallel for simd schedule(static)
     for (int i = 0; i < n; ++i) {
         data[i] = 1 / (1 + expf(-data[i]));
     }
