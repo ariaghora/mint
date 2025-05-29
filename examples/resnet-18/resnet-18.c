@@ -37,8 +37,8 @@ int main(int argc, char **argv) {
     mt_tensor *image         = mt_tensor_load_image(argv[2]);
     mt_tensor *image_resized = mt_image_resize(image, 224, 224);
 
-    float *mean = MT_ARR_FLOAT(0.485, 0.456, 0.406);
-    float *std  = MT_ARR_FLOAT(0.229, 0.224, 0.225);
+    float *mean = (float[]){0.485, 0.456, 0.406};
+    float *std  = (float[]){0.229, 0.224, 0.225};
     mt_image_standardize(image_resized, mean, std);
 
     mt_tensor_unsqueeze_inplace(image_resized, 0);
