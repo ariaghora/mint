@@ -12,7 +12,7 @@ it is possible to integrate with the other libraries such as BLAS if needed.
 
 - NumPy style broadcasting
 - BLAS backend (optional)
-- OpenMP acceleration (when linked)
+- Arm NEON intrinsics (specify `#define MT_USE_NEON`)
 
 
 
