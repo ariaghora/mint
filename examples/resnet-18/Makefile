@@ -1,6 +1,6 @@
 CC ?= gcc
 
-CFLAGS = -Wall -Wextra -g -O3 -pedantic -lpthread -framework Accelerate
+CFLAGS = -Wall -Wextra -g -O3 -pedantic 
 
 TARGET = resnet-18
 SRC = $(TARGET).c
