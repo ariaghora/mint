@@ -9,7 +9,7 @@ import numpy as np
 import onnx
 import torch
 
-ACCEPTED_OPSET = 12
+ACCEPTED_OPSET = 14
 MAX_INPUT_OUTPUT_NAME_LEN = 50
 
 # The ordering must be identical to that of `mint.h`
@@ -93,6 +93,14 @@ def parse_onnx(filename: str) -> Dict[str, Any]:
         name_to_id[initializer.name] = len(model_structure["tensors"])
         val = onnx_tensor_to_numpy(initializer)
         model_structure["tensors"].append(val)
+
+    for node in onnx_model.graph.node:
+        for i, input_name in enumerate(node.input):
+            if not input_name:
+                # generate a random name
+                input_name = f"input_{len(model_structure['tensors'])}"
+                node.input[i] = input_name
+                name_to_id[input_name] = len(model_structure["tensors"])
 
     # Process nodes
     for node in onnx_model.graph.node:
@@ -190,12 +198,6 @@ def write_instance_normalization(
     eps = node["attributes"].get("epsilon", 1e-05)
     np.array(eps, dtype=np.float32).tofile(f)
 
-    # scale_idx = node["inputs"][1]
-    # scale = tensors[scale_idx]
-    # b_idx = node["inputs"][2]
-    # b = tensors[b_idx]
-    # write_ndarray(f, scale)
-    # write_ndarray(f, b)
     print(f"wrote InstanceNormalization {id}")
 
 
@@ -477,7 +479,11 @@ def write_split(
 ):
     write_layer_header(f, LayerKind.SPLIT.value, node)
     axis = node["attributes"]["axis"]
-    splits = node["attributes"]["split"]
+    splits = node["attributes"].get("split", None)
+    if splits is None:
+        # if none, then splits could be the second input
+        splits = tensors[node["inputs"][1]]
+
     np.array(axis, dtype=np.int32).tofile(f)
     np.array(len(splits), dtype=np.int32).tofile(f)
     np.array(splits, dtype=np.int32).tofile(f)
