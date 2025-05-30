@@ -3618,9 +3618,15 @@ MTDEF void mt__layer_forward(mt_layer *l, mt_model *model) {
         break;
     }
     case MT_LAYER_CONV_2D: {
-        mt_tensor *input = model->tensors[l->inputs[0]];
-        mt_tensor *w     = model->tensors[l->data.conv_2d.w_id];
-        mt_tensor *b     = model->tensors[l->data.conv_2d.b_id];
+        int        no_of_inputs = l->input_count;
+        mt_tensor *input        = model->tensors[l->inputs[0]];
+        mt_tensor *w            = model->tensors[l->data.conv_2d.w_id];
+        mt_tensor *b            = NULL;
+        if (no_of_inputs == 3) {
+            b = model->tensors[l->data.conv_2d.b_id];
+        } else {
+            b = mt_tensor_alloc_values((int[]){w->shape[0]}, 1, (float[]){0});
+        }
 
         int kernel_shape[] = {w->shape[2], w->shape[3]};
         int strides[]      = {l->data.conv_2d.stride, l->data.conv_2d.stride};
