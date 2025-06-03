@@ -194,6 +194,68 @@ MTDEF void mt_onnx__make_conv(mt_layer *layer, int opset,
     }
 }
 
+MTDEF void mt_onnx__make_max_pool(mt_layer *layer, int opset,
+                                  Onnx__NodeProto *node_proto) {
+    // Default values:
+    layer->data.max_pool_2d.auto_pad = 0;
+    layer->data.max_pool_2d.size     = 2;
+    layer->data.max_pool_2d.stride   = 1;
+    memcpy(layer->data.max_pool_2d.pads, (int[]){0, 0, 0, 0}, 4);
+
+    // Read attributes of max_pool_2d layer: auto_pad, size, stride, pads.
+    if (opset >= 1 && opset <= 22) {
+        for (size_t i = 0; i < node_proto->n_attribute; i++) {
+            Onnx__AttributeProto *attribute_proto = node_proto->attribute[i];
+            if (strcmp(attribute_proto->name, "auto_pad") == 0) {
+                if (strcmp((const char *)attribute_proto->s.data, "NOTSET") ==
+                    0) {
+                    layer->data.max_pool_2d.auto_pad = 0;
+                } else if (strcmp((const char *)attribute_proto->s.data,
+                                  "VALID") == 0) {
+                    layer->data.max_pool_2d.auto_pad = 1;
+                } else if (strcmp((const char *)attribute_proto->s.data,
+                                  "SAME_UPPER") == 0) {
+                    layer->data.max_pool_2d.auto_pad = 2;
+                } else if (strcmp((const char *)attribute_proto->s.data,
+                                  "SAME_LOWER") == 0) {
+                    layer->data.max_pool_2d.auto_pad = 3;
+                } else {
+                    layer->data.max_pool_2d.auto_pad = 0; // default to NOTSET
+                }
+            } else if (strcmp(attribute_proto->name, "size") == 0) {
+                layer->data.max_pool_2d.size = attribute_proto->i;
+            } else if (strcmp(attribute_proto->name, "stride") == 0) {
+                layer->data.max_pool_2d.stride = attribute_proto->i;
+            } else if (strcmp(attribute_proto->name, "pads") == 0) {
+                memcpy(layer->data.max_pool_2d.pads, attribute_proto->ints,
+                       attribute_proto->n_ints);
+            } else if (strcmp(attribute_proto->name, "ceil_mode") == 0) {
+                // Ensure ceil_mode is 0
+                if (attribute_proto->i != 0) {
+                    ERROR_F("non-zero ceil_mode is not supported for %s",
+                            node_proto->op_type);
+                    exit(1);
+                }
+            } else if (strcmp(attribute_proto->name, "storage_order") == 0) {
+                ERROR_F("storage_order is not supported for %s",
+                        node_proto->op_type);
+                exit(1);
+            } else if (strcmp(attribute_proto->name, "dilations") == 0) {
+                // ensure all dilations are 1, otherwise, panic
+                for (size_t j = 1; j < attribute_proto->n_ints; j++) {
+                    if (attribute_proto->ints[j] != 1) {
+                        ERROR("All dilations must be 1 for max_pool_2d");
+                        exit(1);
+                    }
+                }
+            }
+        }
+    } else {
+        ERROR_F("Opset %d is not supported for %s", opset, node_proto->op_type);
+        exit(1);
+    }
+}
+
 MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
                                  size_t         model_bytes_len) {
     Onnx__ModelProto *model_proto = onnx__model_proto__unpack(
@@ -297,7 +359,7 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
             mt_onnx__make_conv(layer, opset, node_proto);
             break;
         case MT_LAYER_MAX_POOL_2D:
-            WARN_LOG("MaxPool is not implemented yet");
+            mt_onnx__make_max_pool(layer, opset, node_proto);
             break;
         case MT_LAYER_FLATTEN:
             WARN_LOG("Flatten is not implemented yet");
