@@ -300,8 +300,9 @@ MTDEF void       mt_tensor_debug_info(mt_tensor *t);
 // Free tensor
 MTDEF void       mt_tensor_free(mt_tensor *t);
 // Load image as a tensor with shape of CxHxW. C is the number of channel, H
-// is the image height, and W is the image widthmt_tensor
-// *mt_tensor_load_image(char *filename); Pad along tensor's dimension
+// is the image height, and W is the image width
+mt_tensor       *mt_tensor_load_image(char *filename);
+// Pad along tensor's dimension
 MTDEF mt_tensor *mt_tensor_pad(mt_tensor *t, int *pads, mt_pad_mode mode);
 // Swap tensor's dimensions
 MTDEF mt_tensor *mt_tensor_permute_dims(mt_tensor *t, int *dims);
