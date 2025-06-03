@@ -88,6 +88,16 @@ typedef struct tensor_info_t {
     char *name;
 } tensor_info_t;
 
+MTDEF int mt_onnx__get_tensor_id(tensor_info_t *tensor_infos, int n_tensor,
+                                 const char *name) {
+    for (int i = 0; i < n_tensor; i++) {
+        if (strcmp(tensor_infos[i].name, name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 MTDEF mt_tensor *
 mt_onnx__tensor_proto_to_mt_tensor(Onnx__TensorProto *tensor_proto) {
     int shape[tensor_proto->n_dims];
@@ -123,29 +133,59 @@ mt_onnx__tensor_proto_to_mt_tensor(Onnx__TensorProto *tensor_proto) {
     return tensor;
 }
 
-MTDEF void mt_onnx__make_conv(mt_layer *layer, Onnx__ModelProto *model_proto,
-                              int opset, Onnx__NodeProto *node_proto) {
-    char              *w_name = node_proto->input[1];
-    Onnx__TensorProto *w_tensor_proto =
-        mt_onnx__get_tensor_proto(model_proto, w_name);
+MTDEF void mt_onnx__make_conv(mt_layer *layer, int opset,
+                              Onnx__NodeProto *node_proto) {
+    layer->data.conv_2d.w_id = layer->inputs[1];
+    layer->data.conv_2d.b_id = layer->inputs[2];
 
-    UNUSED(w_tensor_proto);
-    UNUSED(layer);
+    // Default values:
+    memcpy(layer->data.conv_2d.dilations, (int[]){1, 1}, 2);
+    memcpy(layer->data.conv_2d.pads, (int[]){0, 0, 0, 0}, 4);
+    layer->data.conv_2d.group    = 1;
+    layer->data.conv_2d.auto_pad = 0;
+    layer->data.conv_2d.stride   = 1;
 
-    int n_input = node_proto->n_input;
-    if (n_input == 3) {
-        // 3 inputs: x, w, b
-        char              *b_name = node_proto->input[2];
-        Onnx__TensorProto *b_tensor_proto =
-            mt_onnx__get_tensor_proto(model_proto, b_name);
-        UNUSED(b_tensor_proto);
-    } else {
-        // 2 inputs: x, w
-        ERROR("Conv with 2 inputs only is not supported yet");
-        exit(1);
-    }
-
+    // Read attributes
     if (opset >= 11 && opset < 22) {
+        for (size_t i = 0; i < node_proto->n_attribute; i++) {
+            Onnx__AttributeProto *attribute_proto = node_proto->attribute[i];
+            if (strcmp(attribute_proto->name, "dilations") == 0) {
+                memcpy(layer->data.conv_2d.dilations, attribute_proto->ints,
+                       attribute_proto->n_ints);
+            } else if (strcmp(attribute_proto->name, "pads") == 0) {
+                memcpy(layer->data.conv_2d.pads, attribute_proto->ints,
+                       attribute_proto->n_ints);
+            } else if (strcmp(attribute_proto->name, "group") == 0) {
+                layer->data.conv_2d.group = attribute_proto->i;
+            } else if (strcmp(attribute_proto->name, "auto_pad") == 0) {
+                if (strcmp((const char *)attribute_proto->s.data, "NOTSET") ==
+                    0) {
+                    layer->data.conv_2d.auto_pad = 0;
+                } else if (strcmp((const char *)attribute_proto->s.data,
+                                  "VALID") == 0) {
+                    layer->data.conv_2d.auto_pad = 1;
+                } else if (strcmp((const char *)attribute_proto->s.data,
+                                  "SAME_UPPER") == 0) {
+                    layer->data.conv_2d.auto_pad = 2;
+                } else if (strcmp((const char *)attribute_proto->s.data,
+                                  "SAME_LOWER") == 0) {
+                    layer->data.conv_2d.auto_pad = 3;
+                } else {
+                    layer->data.conv_2d.auto_pad = 0; // default to NOTSET
+                }
+            } else if (strcmp(attribute_proto->name, "strides") == 0) {
+                // ensure all strides are the same
+                for (size_t j = 1; j < attribute_proto->n_ints; j++) {
+                    if (attribute_proto->ints[j] != attribute_proto->ints[0]) {
+                        ERROR_F(
+                            "Cannot handle different strides yet: %lld != %lld",
+                            attribute_proto->ints[j], attribute_proto->ints[0]);
+                        exit(1);
+                    }
+                }
+                layer->data.conv_2d.stride = attribute_proto->ints[0];
+            }
+        }
     } else {
         ERROR_F("Opset %d is not supported for %s", opset, node_proto->op_type);
         exit(1);
@@ -235,9 +275,24 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
         layer->id           = i;
         model->layers[i]    = layer;
 
+        for (size_t j = 0; j < node_proto->n_input; j++) {
+            int input_id = mt_onnx__get_tensor_id(
+                tensor_infos,
+                model_proto->graph->n_initializer + model_proto->graph->n_input,
+                node_proto->input[j]);
+            layer->inputs[j] = input_id;
+        }
+        for (size_t j = 0; j < node_proto->n_output; j++) {
+            int output_id = mt_onnx__get_tensor_id(
+                tensor_infos,
+                model_proto->graph->n_initializer + model_proto->graph->n_input,
+                node_proto->output[j]);
+            layer->outputs[j] = output_id;
+        }
+
         switch (kind) {
         case MT_LAYER_CONV_2D:
-            mt_onnx__make_conv(layer, model_proto, opset, node_proto);
+            mt_onnx__make_conv(layer, opset, node_proto);
             break;
         case MT_LAYER_MAX_POOL_2D:
             WARN_LOG("MaxPool is not implemented yet");
