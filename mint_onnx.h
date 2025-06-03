@@ -145,8 +145,10 @@ MTDEF void mt_onnx__make_conv(mt_layer *layer, int opset,
     layer->data.conv_2d.auto_pad = 0;
     layer->data.conv_2d.stride   = 1;
 
-    // Read attributes
-    if (opset >= 11 && opset < 22) {
+    // Read attributes of conv2d layer
+    // There is no significant difference from opset 1 to 22, except for
+    // the type constraints, which are irrelevant to us.
+    if (opset >= 1 && opset <= 22) {
         for (size_t i = 0; i < node_proto->n_attribute; i++) {
             Onnx__AttributeProto *attribute_proto = node_proto->attribute[i];
             if (strcmp(attribute_proto->name, "dilations") == 0) {
