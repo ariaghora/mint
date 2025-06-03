@@ -571,8 +571,8 @@ typedef struct mt_model {
     int output_count;
     struct {
         int  id;
-        char name[MAX_INPUT_OUTPUT_COUNT];
-    } outputs[10];
+        char name[MAX_INPUT_OUTPUT_NAME_LEN];
+    } outputs[MAX_INPUT_OUTPUT_COUNT];
 } mt_model;
 
 #define MT_ARR_INT(...)   ((int[]){__VA_ARGS__})
