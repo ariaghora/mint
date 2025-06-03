@@ -428,7 +428,7 @@ MTDEF void              mt_layer_debug_info(mt_layer *l);
 #define MAX_MODEL_INITIALIZER_COUNT 1500
 #define MAX_TENSOR_NDIM             5
 #define MAX_TENSOR_SPLITS           5
-#define MAX_INPUT_OUTPUT_COUNT      5
+#define MAX_INPUT_OUTPUT_COUNT      50
 #define MAX_INPUT_OUTPUT_NAME_LEN   50
 
 #define MATMUL_BLOCK_SIZE 64
