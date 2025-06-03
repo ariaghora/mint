@@ -22,7 +22,9 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
 #include <stdio.h>
 #include <stdlib.h>
 
+#if !defined(UNUSED)
 #define UNUSED(x) ((void)(x))
+#endif
 
 MTDEF mt_layer_kind mt_onnx__get_layer_kind(const char *op_type) {
     if (strcmp(op_type, "Conv") == 0) {
@@ -256,6 +258,25 @@ MTDEF void mt_onnx__make_max_pool(mt_layer *layer, int opset,
     }
 }
 
+MTDEF void mt_onnx__make_flatten(mt_layer *layer, int opset,
+                                 Onnx__NodeProto *node_proto) {
+    // Default values:
+    layer->data.flatten.axis = 1;
+
+    // Read attributes of flatten layer: axis
+    if (opset >= 1 && opset <= 22) {
+        for (size_t i = 0; i < node_proto->n_attribute; i++) {
+            Onnx__AttributeProto *attribute_proto = node_proto->attribute[i];
+            if (strcmp(attribute_proto->name, "axis") == 0) {
+                layer->data.flatten.axis = attribute_proto->i;
+            }
+        }
+    } else {
+        ERROR_F("Opset %d is not supported for %s", opset, node_proto->op_type);
+        exit(1);
+    }
+}
+
 MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
                                  size_t         model_bytes_len) {
     Onnx__ModelProto *model_proto = onnx__model_proto__unpack(
@@ -362,7 +383,7 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
             mt_onnx__make_max_pool(layer, opset, node_proto);
             break;
         case MT_LAYER_FLATTEN:
-            WARN_LOG("Flatten is not implemented yet");
+            mt_onnx__make_flatten(layer, opset, node_proto);
             break;
         case MT_LAYER_DENSE:
             WARN_LOG("Dense is not implemented yet");
@@ -397,13 +418,6 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
                             if (prev_layer->next_count < MAX_LAYER_NEXT_COUNT) {
                                 prev_layer->next[prev_layer->next_count++] = i;
                             }
-
-                            /*
-                            DEBUG_LOG_F("Connection found: %s (node %zu) -> %s "
-                                        "(node %zu)",
-                                        prev_node_info.name, j,
-                                        node_proto->name, i);
-                            */
                         }
                         // Once we've found a connection for this input, move to
                         // the next input
