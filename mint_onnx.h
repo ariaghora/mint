@@ -225,6 +225,7 @@ MTDEF void mt_onnx__make_dense(mt_model *model, mt_layer *layer, int opset,
         mt_tensor *w = model->tensors[layer->data.dense.w_id];
         MT_ASSERT_F(w->ndim == 2, "w must be 2 dimensional, got %d", w->ndim);
         mt_tensor *wt = mt_tensor_permute_dims(w, (int[]){1, 0});
+        mt_tensor_free(w);
         model->tensors[layer->data.dense.w_id] = wt;
     }
 }
