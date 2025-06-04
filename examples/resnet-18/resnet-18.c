@@ -19,6 +19,10 @@ uncomment one of lines below as needed
 // #define MT_USE_PTHREAD
 
 #include "../../mint.h"
+#define MT_ONNX_IMPLEMENTATION
+#include "../../mint_onnx.h"
+
+#include <time.h>
 
 int main(int argc, char **argv) {
     // clang-format off
@@ -33,8 +37,25 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
-    mt_model  *model         = mt_model_load(argv[1]);
-    mt_tensor *image         = mt_tensor_load_image(argv[2]);
+    char *model_path = argv[1];
+    char *image_path = argv[2];
+
+    clock_t   start = clock();
+    mt_model *model = NULL;
+    if (strstr(model_path, ".onnx") != NULL) {
+        model = mt_onnx_read_file(model_path);
+    } else {
+        model = mt_model_load(model_path);
+    }
+    clock_t end        = clock();
+    double  time_spent = (double)(end - start) / CLOCKS_PER_SEC;
+    printf("Model loading time: %.3f seconds\n", time_spent);
+
+    if (model == NULL) {
+        ERROR("Failed to load model");
+        exit(1);
+    }
+    mt_tensor *image         = mt_tensor_load_image(image_path);
     mt_tensor *image_resized = mt_image_resize(image, 224, 224);
 
     float *mean = (float[]){0.485, 0.456, 0.406};
