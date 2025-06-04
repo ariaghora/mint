@@ -43,6 +43,10 @@ MTDEF mt_layer_kind mt_onnx__get_layer_kind(const char *op_type) {
         return MT_LAYER_FLATTEN;
     } else if (strcmp(op_type, "Gemm") == 0) {
         return MT_LAYER_DENSE;
+    } else if (strcmp(op_type, "Pad") == 0) {
+        return MT_LAYER_PAD;
+    } else if (strcmp(op_type, "InstanceNormalization") == 0) {
+        return MT_LAYER_INSTANCE_NORMALIZATION;
     }
     return MT_LAYER_UNKNOWN;
 }
@@ -345,6 +349,78 @@ MTDEF void mt_onnx__make_flatten(mt_layer *layer, int opset,
     }
 }
 
+MTDEF void mt_onnx__make_pad(mt_layer *layer, mt_model *model, int opset,
+                             Onnx__NodeProto *node_proto) {
+    if (opset >= 2 && opset < 11) {
+        // pads in the attribute
+        MT_ASSERT_F(node_proto->n_input == 1,
+                    "Pad for opset %d must have 1 input", opset);
+
+        // ensure `pads` attribute exists
+        int found = 0;
+        for (size_t i = 0; i < node_proto->n_attribute; i++) {
+            if (strcmp(node_proto->attribute[i]->name, "pads") == 0) {
+                found = 1;
+                // ensure length of pads is 8 (double of input tensor's dims)
+                if (node_proto->attribute[i]->n_ints != 8) {
+                    ERROR_F(
+                        "Supported Pad opset %d must have 8 pads, found %zu",
+                        opset, node_proto->attribute[i]->n_ints);
+                    exit(1);
+                }
+
+                /* To comply with mint's format, make pads as a layer input */
+
+                // assign a new tensor id for pads
+                int      pads_id = model->tensor_count;
+                mt_float pads_values[8];
+                for (size_t j = 0; j < 8; j++) {
+                    pads_values[j] = node_proto->attribute[i]->ints[j];
+                }
+                model->tensors[pads_id] =
+                    mt_tensor_alloc_values((int[]){8}, 1, pads_values);
+                layer->inputs[1] = pads_id;
+                model->tensor_count++;
+            }
+        }
+
+        if (!found) {
+            ERROR_F("Pad for opset %d must have `pads` attribute", opset);
+            exit(1);
+        }
+
+        // ensure `pads` attribute is a list of ints
+        // Onnx__AttributeProto *attribute_proto = node_proto->attribute[0];
+        // if (attribute_proto->n_ints != 4) {
+        //     ERROR_F("Pad is not supported yet for opset %d", opset);
+        //     exit(1);
+        // }
+    } else if (opset >= 11 && opset < 13) {
+        // pads in the list of inputs
+        ERROR_F("Pad is not supported yet for opset %d", opset);
+        exit(1);
+    } else {
+        ERROR_F("Pad is not supported yet for opset %d", opset);
+        exit(1);
+    }
+}
+
+MTDEF void mt_onnx__make_instance_normalization(mt_layer *layer, int opset,
+                                                Onnx__NodeProto *node_proto) {
+    // Default values:
+    layer->data.instance_normalization.eps = 1e-5;
+
+    // Read attributes of instance_normalization layer: epsilon
+    if (opset >= 1 && opset <= 22) {
+        for (size_t i = 0; i < node_proto->n_attribute; i++) {
+            Onnx__AttributeProto *attribute_proto = node_proto->attribute[i];
+            if (strcmp(attribute_proto->name, "epsilon") == 0) {
+                layer->data.instance_normalization.eps = attribute_proto->f;
+            }
+        }
+    }
+}
+
 MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
                                  size_t         model_bytes_len) {
     Onnx__ModelProto *model_proto = onnx__model_proto__unpack(
@@ -365,8 +441,8 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
     model->input_count  = model_proto->graph->n_input;
     model->output_count = model_proto->graph->n_output;
 
-    // First we collect all ONNX tensors and their names without assigning final
-    // IDs
+    // First we collect all ONNX tensors and their names without assigning
+    // final IDs
 
     // Track all tensors in the model
     typedef struct {
@@ -574,8 +650,10 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
         }
     }
 
-    // Pass 1:
-    // Collect node info, including name, input names, output names, input count
+    model->tensor_count = tensor_count;
+
+    // Collect node info, including name, input names, output names, input
+    // count
     node_info_t node_infos[MAX_LAYER_COUNT];
     for (size_t i = 0; i < model_proto->graph->n_node; i++) {
         Onnx__NodeProto *node_proto = model_proto->graph->node[i];
@@ -638,6 +716,12 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
         case MT_LAYER_DENSE:
             mt_onnx__make_dense(model, layer, opset, node_proto);
             break;
+        case MT_LAYER_PAD:
+            mt_onnx__make_pad(layer, model, opset, node_proto);
+            break;
+        case MT_LAYER_INSTANCE_NORMALIZATION:
+            mt_onnx__make_instance_normalization(layer, opset, node_proto);
+            break;
         // Pass through, since there's no data to parse
         case MT_LAYER_ADD:
         case MT_LAYER_EXP:
@@ -656,19 +740,20 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
                 char *output_name = prev_node_info.output_names[k];
                 for (size_t l = 0; l < node_proto->n_input; l++) {
                     if (strcmp(output_name, node_proto->input[l]) == 0) {
-                        // Record the connection in the model's layer structure
+                        // Record the connection in the model's layer
+                        // structure
                         if (layer->prev_count < MAX_LAYER_PREV_COUNT) {
                             layer->prev[layer->prev_count++] = j;
 
-                            // Also update the next connection for the previous
-                            // layer
+                            // Also update the next connection for the
+                            // previous layer
                             mt_layer *prev_layer = model->layers[j];
                             if (prev_layer->next_count < MAX_LAYER_NEXT_COUNT) {
                                 prev_layer->next[prev_layer->next_count++] = i;
                             }
                         }
-                        // Once we've found a connection for this input, move to
-                        // the next input
+                        // Once we've found a connection for this input,
+                        // move to the next input
                         break;
                     }
                 }

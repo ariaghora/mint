@@ -532,6 +532,12 @@ typedef struct mt_layer {
             int pads[4];
         } max_pool_2d;
 
+        // MT_LAYER_PAD
+        struct {
+            char mode; // 0: constant, 1: edge, 2: reflect
+            int  value;
+        } pad;
+
         // MT_LAYER_RESIZE
         struct {
             int mode;
