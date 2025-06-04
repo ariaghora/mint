@@ -49,8 +49,11 @@ MTDEF mt_layer_kind mt_onnx__get_layer_kind(const char *op_type) {
 
 MTDEF mt_model *mt_onnx_read_file(const char *filename) {
     FILE *file = fopen(filename, "rb");
-    if (file == NULL)
+    if (file == NULL) {
+        ERROR_F("Failed to open file %s", filename);
         return NULL;
+    }
+
     fseek(file, 0, SEEK_END);
     size_t file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
@@ -121,10 +124,19 @@ mt_onnx__tensor_proto_to_mt_tensor(Onnx__TensorProto *tensor_proto) {
                 tensor->data[i] = tensor_proto->float_data[i];
             }
         } else if (tensor_proto->raw_data.len > 0) {
+            // Create a properly aligned copy of the data
             mt_float *float_data = (mt_float *)tensor_proto->raw_data.data;
-            for (size_t i = 0; i < n_element; i++) {
-                tensor->data[i] = (mt_float)float_data[i];
-            }
+
+            // Make sure data is aligned for SIMD operations (memory alignment
+            // critical for performance) Create a temp buffer that's properly
+            // aligned - this matches what the .mt loader does
+            mt_float *aligned_data =
+                (mt_float *)MT_MALLOC(n_element * sizeof(mt_float));
+            memcpy(aligned_data, float_data, n_element * sizeof(mt_float));
+
+            // Use the aligned data
+            memcpy(tensor->data, aligned_data, n_element * sizeof(mt_float));
+            free(aligned_data);
         } else {
             ERROR_F("No data found in tensor %s", tensor_proto->name);
         }
@@ -154,11 +166,13 @@ MTDEF void mt_onnx__make_conv(mt_layer *layer, int opset,
         for (size_t i = 0; i < node_proto->n_attribute; i++) {
             Onnx__AttributeProto *attribute_proto = node_proto->attribute[i];
             if (strcmp(attribute_proto->name, "dilations") == 0) {
-                memcpy(layer->data.conv_2d.dilations, attribute_proto->ints,
-                       attribute_proto->n_ints);
+                for (size_t j = 0; j < attribute_proto->n_ints; j++) {
+                    layer->data.conv_2d.dilations[j] = attribute_proto->ints[j];
+                }
             } else if (strcmp(attribute_proto->name, "pads") == 0) {
-                memcpy(layer->data.conv_2d.pads, attribute_proto->ints,
-                       attribute_proto->n_ints);
+                for (size_t j = 0; j < attribute_proto->n_ints; j++) {
+                    layer->data.conv_2d.pads[j] = attribute_proto->ints[j];
+                }
             } else if (strcmp(attribute_proto->name, "group") == 0) {
                 layer->data.conv_2d.group = attribute_proto->i;
             } else if (strcmp(attribute_proto->name, "auto_pad") == 0) {
@@ -258,13 +272,33 @@ MTDEF void mt_onnx__make_max_pool(mt_layer *layer, int opset,
                 } else {
                     layer->data.max_pool_2d.auto_pad = 0; // default to NOTSET
                 }
-            } else if (strcmp(attribute_proto->name, "size") == 0) {
-                layer->data.max_pool_2d.size = attribute_proto->i;
-            } else if (strcmp(attribute_proto->name, "stride") == 0) {
-                layer->data.max_pool_2d.stride = attribute_proto->i;
+            } else if (strcmp(attribute_proto->name, "kernel_shape") == 0) {
+                // ensure all kernel_shape are the same
+                for (size_t j = 1; j < attribute_proto->n_ints; j++) {
+                    if (attribute_proto->ints[j] != attribute_proto->ints[0]) {
+                        ERROR_F("Cannot handle different kernel_shape yet: "
+                                "%lld != %lld",
+                                attribute_proto->ints[j],
+                                attribute_proto->ints[0]);
+                        exit(1);
+                    }
+                }
+                layer->data.max_pool_2d.size = attribute_proto->ints[0];
+            } else if (strcmp(attribute_proto->name, "strides") == 0) {
+                // ensure all strides are the same
+                for (size_t j = 1; j < attribute_proto->n_ints; j++) {
+                    if (attribute_proto->ints[j] != attribute_proto->ints[0]) {
+                        ERROR_F(
+                            "Cannot handle different strides yet: %lld != %lld",
+                            attribute_proto->ints[j], attribute_proto->ints[0]);
+                        exit(1);
+                    }
+                }
+                layer->data.max_pool_2d.stride = attribute_proto->ints[0];
             } else if (strcmp(attribute_proto->name, "pads") == 0) {
-                memcpy(layer->data.max_pool_2d.pads, attribute_proto->ints,
-                       attribute_proto->n_ints);
+                for (size_t j = 0; j < attribute_proto->n_ints; j++) {
+                    layer->data.max_pool_2d.pads[j] = attribute_proto->ints[j];
+                }
             } else if (strcmp(attribute_proto->name, "ceil_mode") == 0) {
                 // Ensure ceil_mode is 0
                 if (attribute_proto->i != 0) {
@@ -327,11 +361,221 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
         ERROR("Failed to allocate memory for model");
         return NULL;
     }
-    model->layer_count = model_proto->graph->n_node;
+    model->layer_count  = model_proto->graph->n_node;
+    model->input_count  = model_proto->graph->n_input;
+    model->output_count = model_proto->graph->n_output;
+
+    // First we collect all ONNX tensors and their names without assigning final
+    // IDs
+
+    // Track all tensors in the model
+    typedef struct {
+        char      *name;
+        mt_tensor *data; // NULL for non-initializers
+        int        is_input;
+        int        is_output;
+        int        is_initializer;
+    } tensor_map_t;
+
+    tensor_map_t all_tensors[MAX_MODEL_INITIALIZER_COUNT];
+    int          total_tensors = 0;
+
+    // Initialize name-to-index mapping for quick lookups
+    char *tensor_names[MAX_MODEL_INITIALIZER_COUNT];
+    int   tensor_count = 0;
+
+    // First, collect all model inputs
+    for (size_t i = 0; i < model_proto->graph->n_input; i++) {
+        Onnx__ValueInfoProto *value_info_proto = model_proto->graph->input[i];
+        all_tensors[total_tensors].name        = value_info_proto->name;
+        all_tensors[total_tensors].data        = NULL;
+        all_tensors[total_tensors].is_input    = 1;
+        all_tensors[total_tensors].is_output   = 0;
+        all_tensors[total_tensors].is_initializer = 0;
+        tensor_names[tensor_count++]              = value_info_proto->name;
+        total_tensors++;
+    }
+
+    // Next, collect all initializers (weights)
+    for (size_t i = 0; i < model_proto->graph->n_initializer; i++) {
+        Onnx__TensorProto *tensor_proto = model_proto->graph->initializer[i];
+
+        // Check if this initializer is already in our list (as an input)
+        int found = 0;
+        for (int j = 0; j < total_tensors; j++) {
+            if (strcmp(all_tensors[j].name, tensor_proto->name) == 0) {
+                // This is both an input and initializer
+                all_tensors[j].data =
+                    mt_onnx__tensor_proto_to_mt_tensor(tensor_proto);
+                all_tensors[j].is_initializer = 1;
+                found                         = 1;
+                break;
+            }
+        }
+
+        if (!found) {
+            all_tensors[total_tensors].name = tensor_proto->name;
+            all_tensors[total_tensors].data =
+                mt_onnx__tensor_proto_to_mt_tensor(tensor_proto);
+            all_tensors[total_tensors].is_input       = 0;
+            all_tensors[total_tensors].is_output      = 0;
+            all_tensors[total_tensors].is_initializer = 1;
+            tensor_names[tensor_count++]              = tensor_proto->name;
+            total_tensors++;
+        }
+    }
+
+    // Next, collect all outputs
+    for (size_t i = 0; i < model_proto->graph->n_output; i++) {
+        Onnx__ValueInfoProto *value_info_proto = model_proto->graph->output[i];
+
+        // Check if this output is already in our list
+        int found = 0;
+        for (int j = 0; j < total_tensors; j++) {
+            if (strcmp(all_tensors[j].name, value_info_proto->name) == 0) {
+                all_tensors[j].is_output = 1;
+                found                    = 1;
+                break;
+            }
+        }
+
+        if (!found) {
+            all_tensors[total_tensors].name           = value_info_proto->name;
+            all_tensors[total_tensors].data           = NULL;
+            all_tensors[total_tensors].is_input       = 0;
+            all_tensors[total_tensors].is_output      = 1;
+            all_tensors[total_tensors].is_initializer = 0;
+            tensor_names[tensor_count++]              = value_info_proto->name;
+            total_tensors++;
+        }
+    }
+
+    // Collect node inputs/outputs
+    for (size_t i = 0; i < model_proto->graph->n_node; i++) {
+        Onnx__NodeProto *node = model_proto->graph->node[i];
+
+        for (size_t j = 0; j < node->n_input; j++) {
+            char *input_name = node->input[j];
+
+            // Check if already in the list
+            int found = 0;
+            for (int k = 0; k < tensor_count; k++) {
+                if (strcmp(tensor_names[k], input_name) == 0) {
+                    found = 1;
+                    break;
+                }
+            }
+
+            if (!found) {
+                tensor_names[tensor_count++] = input_name;
+
+                // Add to all_tensors
+                all_tensors[total_tensors].name           = input_name;
+                all_tensors[total_tensors].data           = NULL;
+                all_tensors[total_tensors].is_input       = 0;
+                all_tensors[total_tensors].is_output      = 0;
+                all_tensors[total_tensors].is_initializer = 0;
+                total_tensors++;
+            }
+        }
+
+        for (size_t j = 0; j < node->n_output; j++) {
+            char *output_name = node->output[j];
+
+            // Check if already in the list
+            int found = 0;
+            for (int k = 0; k < tensor_count; k++) {
+                if (strcmp(tensor_names[k], output_name) == 0) {
+                    found = 1;
+                    break;
+                }
+            }
+
+            if (!found) {
+                tensor_names[tensor_count++] = output_name;
+
+                // Add to all_tensors
+                all_tensors[total_tensors].name           = output_name;
+                all_tensors[total_tensors].data           = NULL;
+                all_tensors[total_tensors].is_input       = 0;
+                all_tensors[total_tensors].is_output      = 0;
+                all_tensors[total_tensors].is_initializer = 0;
+                total_tensors++;
+            }
+        }
+    }
+
+    // Now remap tensors to match dump.py's pattern
+    // First inputs
+    int           tensor_idx = 0;
+    int           input_idx  = 0;
+    int           output_idx = 0;
+    tensor_info_t tensor_infos[MAX_MODEL_INITIALIZER_COUNT];
+
+    // Map inputs first, matching dump.py approach
+    for (int i = 0; i < total_tensors; i++) {
+        if (all_tensors[i].is_input) {
+            tensor_infos[tensor_idx].id   = tensor_idx;
+            tensor_infos[tensor_idx].name = all_tensors[i].name;
+            model->tensors[tensor_idx]    = all_tensors[i].data;
+
+            model->inputs[input_idx].id = tensor_idx;
+            strncpy(model->inputs[input_idx].name, all_tensors[i].name,
+                    MAX_INPUT_OUTPUT_NAME_LEN);
+            strncpy(model->tensor_names[tensor_idx], all_tensors[i].name,
+                    MAX_INPUT_OUTPUT_NAME_LEN);
+
+            input_idx++;
+            tensor_idx++;
+        }
+    }
+
+    // Map initializers next (weights with data), exactly like dump.py
+    for (int i = 0; i < total_tensors; i++) {
+        if (all_tensors[i].is_initializer && !all_tensors[i].is_input) {
+            tensor_infos[tensor_idx].id   = tensor_idx;
+            tensor_infos[tensor_idx].name = all_tensors[i].name;
+            model->tensors[tensor_idx]    = all_tensors[i].data;
+            strncpy(model->tensor_names[tensor_idx], all_tensors[i].name,
+                    MAX_INPUT_OUTPUT_NAME_LEN);
+            tensor_idx++;
+        }
+    }
+
+    // Map outputs
+    for (int i = 0; i < total_tensors; i++) {
+        if (all_tensors[i].is_output && !all_tensors[i].is_input &&
+            !all_tensors[i].is_initializer) {
+            tensor_infos[tensor_idx].id   = tensor_idx;
+            tensor_infos[tensor_idx].name = all_tensors[i].name;
+            model->tensors[tensor_idx]    = NULL;
+
+            model->outputs[output_idx].id = tensor_idx;
+            strncpy(model->outputs[output_idx].name, all_tensors[i].name,
+                    MAX_INPUT_OUTPUT_NAME_LEN);
+            strncpy(model->tensor_names[tensor_idx], all_tensors[i].name,
+                    MAX_INPUT_OUTPUT_NAME_LEN);
+
+            output_idx++;
+            tensor_idx++;
+        }
+    }
+
+    // Map remaining intermediate tensors
+    for (int i = 0; i < total_tensors; i++) {
+        if (!all_tensors[i].is_input && !all_tensors[i].is_initializer &&
+            !all_tensors[i].is_output) {
+            tensor_infos[tensor_idx].id   = tensor_idx;
+            tensor_infos[tensor_idx].name = all_tensors[i].name;
+            model->tensors[tensor_idx]    = NULL;
+            strncpy(model->tensor_names[tensor_idx], all_tensors[i].name,
+                    MAX_INPUT_OUTPUT_NAME_LEN);
+            tensor_idx++;
+        }
+    }
 
     // Pass 1:
-    // Collect node info, including name, input names, output names, input
-    // count,
+    // Collect node info, including name, input names, output names, input count
     node_info_t node_infos[MAX_LAYER_COUNT];
     for (size_t i = 0; i < model_proto->graph->n_node; i++) {
         Onnx__NodeProto *node_proto = model_proto->graph->node[i];
@@ -347,39 +591,6 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
         }
     }
 
-    // Pass 2:
-    // Collect tensor info, including name, id
-    tensor_info_t tensor_infos[MAX_MODEL_INITIALIZER_COUNT];
-    for (size_t i = 0; i < model_proto->graph->n_initializer; i++) {
-        Onnx__TensorProto *tensor_proto = model_proto->graph->initializer[i];
-        tensor_infos[i].id              = i;
-        tensor_infos[i].name            = tensor_proto->name;
-        model->tensors[i] = mt_onnx__tensor_proto_to_mt_tensor(tensor_proto);
-    }
-    for (size_t i = 0; i < model_proto->graph->n_input; i++) {
-        int idx = i + model_proto->graph->n_initializer;
-
-        Onnx__ValueInfoProto *value_info_proto = model_proto->graph->input[i];
-        tensor_infos[idx].id                   = idx;
-        tensor_infos[idx].name                 = value_info_proto->name;
-        model->tensors[idx]                    = NULL;
-        model->inputs[i].id                    = idx;
-        strncpy(model->inputs[i].name, value_info_proto->name,
-                MAX_INPUT_OUTPUT_NAME_LEN);
-    }
-    for (size_t i = 0; i < model_proto->graph->n_output; i++) {
-        int idx =
-            i + model_proto->graph->n_initializer + model_proto->graph->n_input;
-        Onnx__ValueInfoProto *value_info_proto = model_proto->graph->output[i];
-        tensor_infos[idx].id                   = idx;
-        tensor_infos[idx].name                 = value_info_proto->name;
-        model->tensors[idx]                    = NULL;
-        model->outputs[i].id                   = idx;
-        strncpy(model->outputs[i].name, value_info_proto->name,
-                MAX_INPUT_OUTPUT_NAME_LEN);
-    }
-
-    // Pass 3:
     // Read layers (nodes)
     Onnx__NodeProto **nodes = model_proto->graph->node;
     DEBUG_LOG_F("Nodes: %zu", model_proto->graph->n_node);
@@ -395,17 +606,22 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
         model->layers[i]    = layer;
 
         for (size_t j = 0; j < node_proto->n_input; j++) {
-            int input_id = mt_onnx__get_tensor_id(
-                tensor_infos,
-                model_proto->graph->n_initializer + model_proto->graph->n_input,
-                node_proto->input[j]);
+            int input_id = mt_onnx__get_tensor_id(tensor_infos, tensor_idx,
+                                                  node_proto->input[j]);
+            if (input_id == -1) {
+                ERROR_F("Input %s not found", node_proto->input[j]);
+                return NULL;
+            }
             layer->inputs[j] = input_id;
         }
+
         for (size_t j = 0; j < node_proto->n_output; j++) {
-            int output_id = mt_onnx__get_tensor_id(
-                tensor_infos,
-                model_proto->graph->n_initializer + model_proto->graph->n_input,
-                node_proto->output[j]);
+            int output_id = mt_onnx__get_tensor_id(tensor_infos, tensor_idx,
+                                                   node_proto->output[j]);
+            if (output_id == -1) {
+                ERROR_F("Output %s not found", node_proto->output[j]);
+                return NULL;
+            }
             layer->outputs[j] = output_id;
         }
 
@@ -433,9 +649,7 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
             return NULL;
         }
 
-        // Try to find previous nodes (not input) that should be connected to
-        // this node. If that node has output that matches any of this node's
-        // inputs, then we found the previous node.
+        // Find previous nodes that connect to this node
         for (size_t j = 0; j < i; j++) {
             node_info_t prev_node_info = node_infos[j];
             for (size_t k = 0; k < (size_t)prev_node_info.output_count; k++) {

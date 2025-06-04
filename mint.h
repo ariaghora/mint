@@ -446,6 +446,10 @@ MTDEF void              mt_layer_debug_info(mt_layer *l);
 #define MIN(a, b) (a < b ? a : b)
 #endif
 
+#if !defined(UNUSED)
+#define UNUSED(x) (void)(x)
+#endif
+
 typedef struct mt_tensor {
     mt_float *data;
 
@@ -565,7 +569,8 @@ typedef struct mt_model {
     int        tensor_count;
     mt_layer  *layers[MAX_LAYER_COUNT];
     mt_tensor *tensors[MAX_MODEL_INITIALIZER_COUNT];
-    int        input_count;
+    char tensor_names[MAX_MODEL_INITIALIZER_COUNT][MAX_INPUT_OUTPUT_NAME_LEN];
+    int  input_count;
     struct {
         int  id;
         char name[MAX_INPUT_OUTPUT_NAME_LEN];
@@ -1496,8 +1501,10 @@ mt_tensor *mt_convolve_2d(mt_tensor *x, mt_tensor *w, mt_tensor *b, int stride,
               "Input channels must be divisible by group");
     MT_ASSERT(w->shape[0] % group == 0,
               "Output channels must be divisible by group");
-    MT_ASSERT(w->shape[1] == x->shape[1] / group,
-              "Input channels per group must match");
+    MT_ASSERT_F(
+        w->shape[1] == x->shape[1] / group,
+        "Input channels per group must match (got %d (group=%d), expected %d)",
+        x->shape[1] / group, group, w->shape[1]);
 
     int batch_size = x->shape[0];
     int C_in       = x->shape[1];
@@ -2021,10 +2028,6 @@ MTDEF void mt__neon_sgemm_row_thread(int i, void *userdata) {
             c20 = vmulq_n_f32(c20, alpha);
             c30 = vmulq_n_f32(c30, alpha);
 
-            // Calculate column limits
-            int cols_left = n - j;
-            int col_block = (cols_left >= 4) ? 4 : cols_left;
-
             // Store results using fixed indices for vgetq_lane_f32
             // Row 0
             if (row_block > 0) {
@@ -2057,6 +2060,7 @@ MTDEF void mt__neon_sgemm(int m, int n, int k, mt_float alpha,
                           const mt_float *A, int lda, const mt_float *B,
                           int ldb, mt_float beta, mt_float *C, int ldc) {
 #ifdef MT_USE_APPLE_ACCELERATE
+    UNUSED(alpha), UNUSED(beta), UNUSED(lda), UNUSED(ldb), UNUSED(ldc);
     vDSP_mmul(A, 1, B, 1, C, 1, m, n, k);
     return;
 #else
@@ -4050,6 +4054,7 @@ void mt_model_set_input(mt_model *model, const char *name, mt_tensor *t) {
     for (int i = 0; i < model->input_count; ++i) {
         if (strcmp(name, model->inputs[i].name) == 0) {
             input_tensor_idx = model->inputs[i].id;
+            DEBUG_LOG_F("setting input `%s` to %d", name, input_tensor_idx);
             break;
         }
     }

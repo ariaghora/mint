@@ -4,8 +4,8 @@ import torch
 if __name__ == "__main__":
     model_path_in = "resnet-18.onnx"
 
-    # Load the pre-trained AlexNet model
-    resnet = models.resnet18(pretrained=True)
+    # Load the pre-trained ResNet-18 model
+    resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
 
     # Set the model to evaluation mode
     resnet.eval()
@@ -15,16 +15,16 @@ if __name__ == "__main__":
 
     # Export the model to ONNX
     torch.onnx.export(
-        resnet,  
-        dummy_input,  
-        model_path_in,  
-        export_params=True, 
-        opset_version=12,  
-        do_constant_folding=True, 
-        input_names=["input"],  
-        output_names=["output"], 
+        resnet,
+        dummy_input,
+        model_path_in,
+        export_params=True,
+        opset_version=12,
+        do_constant_folding=True,
+        input_names=["input"],
+        output_names=["output"],
         dynamic_axes={
-            "input": {0: "batch_size"},  
+            "input": {0: "batch_size"},
             "output": {0: "batch_size"},
         },
     )
