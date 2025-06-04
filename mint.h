@@ -493,6 +493,8 @@ typedef struct mt_layer {
         struct {
             int w_id;
             int b_id;
+            int trans_a;
+            int trans_b;
         } dense;
 
         // MT_LAYER_FLATTEN

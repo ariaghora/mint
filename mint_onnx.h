@@ -196,6 +196,31 @@ MTDEF void mt_onnx__make_conv(mt_layer *layer, int opset,
     }
 }
 
+MTDEF void mt_onnx__make_dense(mt_layer *layer, int opset,
+                               Onnx__NodeProto *node_proto) {
+    layer->data.dense.w_id = layer->inputs[1];
+    layer->data.dense.b_id = layer->inputs[2];
+
+    // Default values:
+    layer->data.dense.trans_a = 0;
+    layer->data.dense.trans_b = 1;
+
+    // Read attributes of dense layer: trans_a, trans_b
+    if (opset >= 1 && opset <= 22) {
+        for (size_t i = 0; i < node_proto->n_attribute; i++) {
+            Onnx__AttributeProto *attribute_proto = node_proto->attribute[i];
+            if (strcmp(attribute_proto->name, "transA") == 0) {
+                layer->data.dense.trans_a = attribute_proto->i;
+            } else if (strcmp(attribute_proto->name, "transB") == 0) {
+                layer->data.dense.trans_b = attribute_proto->i;
+            }
+        }
+    } else {
+        ERROR_F("Opset %d is not supported for %s", opset, node_proto->op_type);
+        exit(1);
+    }
+}
+
 MTDEF void mt_onnx__make_max_pool(mt_layer *layer, int opset,
                                   Onnx__NodeProto *node_proto) {
     // Default values:
@@ -386,7 +411,7 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
             mt_onnx__make_flatten(layer, opset, node_proto);
             break;
         case MT_LAYER_DENSE:
-            WARN_LOG("Dense is not implemented yet");
+            mt_onnx__make_dense(layer, opset, node_proto);
             break;
         // Pass through, since there's no data to parse
         case MT_LAYER_ADD:
