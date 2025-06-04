@@ -753,11 +753,11 @@ mt_tensor *mt_adaptive_avg_pool_2d(mt_tensor *x, int out_h, int out_w) {
                 "input tensor must have 4 dimensions (an image), found %d",
                 x->ndim);
 
-    int   channels = x->shape[0];
-    int   in_h     = x->shape[1];
-    int   in_w     = x->shape[2];
-    float stride_h = (float)in_h / out_h;
-    float stride_w = (float)in_w / out_w;
+    int      channels = x->shape[0];
+    int      in_h     = x->shape[1];
+    int      in_w     = x->shape[2];
+    mt_float stride_h = (mt_float)in_h / out_h;
+    mt_float stride_w = (mt_float)in_w / out_w;
 
     // Allocate output tensor
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(channels, out_h, out_w), 3);
@@ -1713,13 +1713,13 @@ mt_tensor *mt_image_resize(mt_tensor *img, int target_height,
     mt_tensor *resized =
         mt_tensor_alloc(MT_ARR_INT(channels, target_height, target_width), 3);
 
-    float height_scale = (float)(src_height - 1) / (target_height - 1);
-    float width_scale  = (float)(src_width - 1) / (target_width - 1);
+    mt_float height_scale = (mt_float)(src_height - 1) / (target_height - 1);
+    mt_float width_scale  = (mt_float)(src_width - 1) / (target_width - 1);
 
     // Pre-compute source y coordinates and their weights
-    float *src_y  = (float *)MT_MALLOC(target_height * sizeof(float));
-    int   *src_y0 = (int *)MT_MALLOC(target_height * sizeof(int));
-    float *dy     = (float *)MT_MALLOC(target_height * sizeof(float));
+    mt_float *src_y  = (mt_float *)MT_MALLOC(target_height * sizeof(mt_float));
+    int      *src_y0 = (int *)MT_MALLOC(target_height * sizeof(int));
+    mt_float *dy     = (mt_float *)MT_MALLOC(target_height * sizeof(mt_float));
 
     for (int y = 0; y < target_height; y++) {
         src_y[y]  = y * height_scale;
@@ -1728,9 +1728,9 @@ mt_tensor *mt_image_resize(mt_tensor *img, int target_height,
     }
 
     // Pre-compute source x coordinates and their weights
-    float *src_x  = (float *)MT_MALLOC(target_width * sizeof(float));
-    int   *src_x0 = (int *)MT_MALLOC(target_width * sizeof(int));
-    float *dx     = (float *)MT_MALLOC(target_width * sizeof(float));
+    mt_float *src_x  = (mt_float *)MT_MALLOC(target_width * sizeof(mt_float));
+    int      *src_x0 = (int *)MT_MALLOC(target_width * sizeof(int));
+    mt_float *dx     = (mt_float *)MT_MALLOC(target_width * sizeof(mt_float));
 
     for (int x = 0; x < target_width; x++) {
         src_x[x]  = x * width_scale;
@@ -1744,18 +1744,18 @@ mt_tensor *mt_image_resize(mt_tensor *img, int target_height,
             resized->data + c * target_height * target_width;
 
         for (int y = 0; y < target_height; y++) {
-            int   y0        = src_y0[y];
-            int   y1        = (y0 < src_height - 1) ? y0 + 1 : y0;
-            float weight_y0 = 1 - dy[y];
-            float weight_y1 = dy[y];
+            int      y0        = src_y0[y];
+            int      y1        = (y0 < src_height - 1) ? y0 + 1 : y0;
+            mt_float weight_y0 = 1 - dy[y];
+            mt_float weight_y1 = dy[y];
 
             for (int x = 0; x < target_width; x++) {
-                int   x0        = src_x0[x];
-                int   x1        = (x0 < src_width - 1) ? x0 + 1 : x0;
-                float weight_x0 = 1 - dx[x];
-                float weight_x1 = dx[x];
+                int      x0        = src_x0[x];
+                int      x1        = (x0 < src_width - 1) ? x0 + 1 : x0;
+                mt_float weight_x0 = 1 - dx[x];
+                mt_float weight_x1 = dx[x];
 
-                float val =
+                mt_float val =
                     weight_y0 * (weight_x0 * src_channel[y0 * src_width + x0] +
                                  weight_x1 * src_channel[y0 * src_width + x1]) +
                     weight_y1 * (weight_x0 * src_channel[y1 * src_width + x0] +
@@ -2136,8 +2136,9 @@ static void mt__generic_sgemm(int m, int n, int k, mt_float alpha,
 #endif
 
 // Unified SGEMM interface
-MTDEF void mt__sgemm(int m, int n, int k, float alpha, const float *A, int lda,
-                     const float *B, int ldb, float beta, float *C, int ldc) {
+MTDEF void mt__sgemm(int m, int n, int k, mt_float alpha, const mt_float *A,
+                     int lda, const mt_float *B, int ldb, mt_float beta,
+                     mt_float *C, int ldc) {
 #ifdef MT_USE_NEON
     mt__neon_sgemm(m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);
 #elif defined(MT_USE_BLAS)
@@ -2967,7 +2968,7 @@ void mt_tensor_print(mt_tensor *t) {
         if (i < t->ndim - 1)
             printf(", ");
     }
-    printf(", dtype=float)\n");
+    printf(", dtype=mt_float)\n");
 
     // Calculate strides
     int strides[MAX_TENSOR_NDIM];
@@ -3220,7 +3221,7 @@ MTDEF int mt_tensor_save_image(mt_tensor *t, char *filename, int quality) {
     for (int row = 0; row < h; row++) {
         for (int col = 0; col < w; col++) {
             for (int chan = 0; chan < c; chan++) {
-                float pixel_value = t->data[chan * h * w + row * w + col];
+                mt_float pixel_value = t->data[chan * h * w + row * w + col];
                 // Clamp values to 0-1 range
                 pixel_value =
                     pixel_value < 0 ? 0 : (pixel_value > 1 ? 1 : pixel_value);
@@ -3638,7 +3639,8 @@ MTDEF void mt__layer_forward(mt_layer *l, mt_model *model) {
         if (no_of_inputs == 3) {
             b = model->tensors[l->data.conv_2d.b_id];
         } else {
-            b = mt_tensor_alloc_values((int[]){w->shape[0]}, 1, (float[]){0});
+            b = mt_tensor_alloc_values((int[]){w->shape[0]}, 1,
+                                       (mt_float[]){0});
         }
 
         int kernel_shape[] = {w->shape[2], w->shape[3]};
