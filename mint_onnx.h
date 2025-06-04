@@ -196,14 +196,14 @@ MTDEF void mt_onnx__make_conv(mt_layer *layer, int opset,
     }
 }
 
-MTDEF void mt_onnx__make_dense(mt_layer *layer, int opset,
+MTDEF void mt_onnx__make_dense(mt_model *model, mt_layer *layer, int opset,
                                Onnx__NodeProto *node_proto) {
     layer->data.dense.w_id = layer->inputs[1];
     layer->data.dense.b_id = layer->inputs[2];
 
     // Default values:
     layer->data.dense.trans_a = 0;
-    layer->data.dense.trans_b = 1;
+    layer->data.dense.trans_b = 0;
 
     // Read attributes of dense layer: trans_a, trans_b
     if (opset >= 1 && opset <= 22) {
@@ -218,6 +218,14 @@ MTDEF void mt_onnx__make_dense(mt_layer *layer, int opset,
     } else {
         ERROR_F("Opset %d is not supported for %s", opset, node_proto->op_type);
         exit(1);
+    }
+
+    // Some providers transpose the weight matrix, so we need to handle that.
+    if (layer->data.dense.trans_b == 1) {
+        mt_tensor *w = model->tensors[layer->data.dense.w_id];
+        MT_ASSERT_F(w->ndim == 2, "w must be 2 dimensional, got %d", w->ndim);
+        mt_tensor *wt = mt_tensor_permute_dims(w, (int[]){1, 0});
+        model->tensors[layer->data.dense.w_id] = wt;
     }
 }
 
@@ -411,7 +419,7 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
             mt_onnx__make_flatten(layer, opset, node_proto);
             break;
         case MT_LAYER_DENSE:
-            mt_onnx__make_dense(layer, opset, node_proto);
+            mt_onnx__make_dense(model, layer, opset, node_proto);
             break;
         // Pass through, since there's no data to parse
         case MT_LAYER_ADD:
