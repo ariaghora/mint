@@ -47,6 +47,10 @@ MTDEF mt_layer_kind mt_onnx__get_layer_kind(const char *op_type) {
         return MT_LAYER_PAD;
     } else if (strcmp(op_type, "InstanceNormalization") == 0) {
         return MT_LAYER_INSTANCE_NORMALIZATION;
+    } else if (strcmp(op_type, "Upsample") == 0) {
+        return MT_LAYER_UPSAMPLE;
+    } else if (strcmp(op_type, "Constant") == 0) {
+        return MT_LAYER_CONSTANT;
     }
     return MT_LAYER_UNKNOWN;
 }
@@ -55,7 +59,6 @@ MTDEF mt_model *mt_onnx_read_file(const char *filename) {
     FILE *file = fopen(filename, "rb");
     if (file == NULL) {
         ERROR_F("Failed to open file %s", filename);
-        return NULL;
     }
 
     fseek(file, 0, SEEK_END);
@@ -79,7 +82,6 @@ mt_onnx__get_tensor_proto(Onnx__ModelProto *model_proto, const char *name) {
         }
     }
     ERROR_F("Tensor %s not found", name);
-    exit(1);
 }
 
 // We maintain table for model's nodes.
@@ -389,12 +391,6 @@ MTDEF void mt_onnx__make_pad(mt_layer *layer, mt_model *model, int opset,
             exit(1);
         }
 
-        // ensure `pads` attribute is a list of ints
-        // Onnx__AttributeProto *attribute_proto = node_proto->attribute[0];
-        // if (attribute_proto->n_ints != 4) {
-        //     ERROR_F("Pad is not supported yet for opset %d", opset);
-        //     exit(1);
-        // }
     } else if (opset >= 11 && opset < 13) {
         // pads in the list of inputs
         ERROR_F("Pad is not supported yet for opset %d", opset);
@@ -418,6 +414,61 @@ MTDEF void mt_onnx__make_instance_normalization(mt_layer *layer, int opset,
                 layer->data.instance_normalization.eps = attribute_proto->f;
             }
         }
+    }
+}
+
+MTDEF void mt_onnx__make_upsample(mt_layer *layer, mt_model *model, int opset,
+                                  Onnx__NodeProto *node_proto) {
+    // Default values:
+    layer->data.upsample.mode = 0;
+
+    // read `mode` attribute
+    for (size_t i = 0; i < node_proto->n_attribute; i++) {
+        if (strcmp(node_proto->attribute[i]->name, "mode") == 0) {
+            if (strcmp((const char *)node_proto->attribute[i]->s.data,
+                       "nearest") == 0) {
+                layer->data.upsample.mode = 0;
+            } else if (strcmp((const char *)node_proto->attribute[i]->s.data,
+                              "bilinear") == 0) {
+                layer->data.upsample.mode = 1;
+            } else {
+                ERROR_F("Unsupported Upsample mode: %s",
+                        node_proto->attribute[i]->s.data);
+            }
+        }
+    }
+
+    if (opset >= 7 && opset < 9) {
+        // scale in the attribute, so ensure there is only one input
+        MT_ASSERT_F(node_proto->n_input == 1,
+                    "Upsample for opset %d must have 1 input", opset);
+
+        // ensure `scales` attribute exists
+        for (size_t i = 0; i < node_proto->n_attribute; i++) {
+            if (strcmp(node_proto->attribute[i]->name, "scales") == 0) {
+                // ensure length of scales is 4
+                if (node_proto->attribute[i]->n_floats != 4) {
+                    ERROR_F("Supported Upsample opset %d must have 4 scales, "
+                            "found %zu",
+                            opset, node_proto->attribute[i]->n_floats);
+                }
+
+                // set the scales as the layer input
+                int scales_id             = model->tensor_count;
+                model->tensors[scales_id] = mt_tensor_alloc_values(
+                    (int[]){4}, 1,
+                    (mt_float[]){node_proto->attribute[i]->floats[0],
+                                 node_proto->attribute[i]->floats[1],
+                                 node_proto->attribute[i]->floats[2],
+                                 node_proto->attribute[i]->floats[3]});
+                layer->inputs[1] = scales_id;
+                model->tensor_count++;
+            }
+        }
+    } else if (opset >= 9 && opset < 10) {
+        // For now nothing to do for opset 9 since the scales are in the input
+    } else {
+        ERROR_F("Upsample is not supported yet for opset %d", opset);
     }
 }
 
@@ -688,7 +739,6 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
                                                   node_proto->input[j]);
             if (input_id == -1) {
                 ERROR_F("Input %s not found", node_proto->input[j]);
-                return NULL;
             }
             layer->inputs[j] = input_id;
         }
@@ -698,7 +748,6 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
                                                    node_proto->output[j]);
             if (output_id == -1) {
                 ERROR_F("Output %s not found", node_proto->output[j]);
-                return NULL;
             }
             layer->outputs[j] = output_id;
         }
@@ -722,15 +771,18 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
         case MT_LAYER_INSTANCE_NORMALIZATION:
             mt_onnx__make_instance_normalization(layer, opset, node_proto);
             break;
+        case MT_LAYER_UPSAMPLE:
+            mt_onnx__make_upsample(layer, model, opset, node_proto);
+            break;
         // Pass through, since there's no data to parse
         case MT_LAYER_ADD:
         case MT_LAYER_EXP:
         case MT_LAYER_RELU:
         case MT_LAYER_GLOBAL_AVG_POOL:
+        case MT_LAYER_CONSTANT:
             break;
         default:
-            ERROR_F("Node %zu: %s is not supported", i, node_proto->op_type);
-            return NULL;
+            ERROR_F("layer kind %s is not supported", node_proto->op_type);
         }
 
         // Find previous nodes that connect to this node
