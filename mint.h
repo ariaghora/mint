@@ -278,6 +278,10 @@ MTDEF mt_tensor *mt_softmax(mt_tensor *input, int axis);
 MTDEF mt_tensor *mt_sub(mt_tensor *a, mt_tensor *b);
 // Find sum values along dimensions
 MTDEF mt_tensor *mt_sum(mt_tensor *input, int axis, int keep_dims);
+// Upsample 4D tensor (NCHW, a batch of images).
+// The scaling mode 0: nearest, 1: bilinear.
+MTDEF mt_tensor *mt_upsample(mt_tensor *input, float x_scale, float y_scale,
+                             int mode);
 
 /*
  * Tensor memory management API
@@ -319,6 +323,8 @@ MTDEF void mt_tensor_split(mt_tensor *t, int axis, int *splits, int n_split,
                            mt_tensor **out);
 // Unsqueeze at given axis
 MTDEF void mt_tensor_unsqueeze_inplace(mt_tensor *t, int axis);
+// Squeeze tensor at given axis
+MTDEF void mt_tensor_squeeze_inplace(mt_tensor *t);
 
 /*
  * Model API
@@ -357,7 +363,8 @@ typedef struct mt_model mt_model;
     T(MT_LAYER_SPLIT)                                                          \
     T(MT_LAYER_SUB)                                                            \
     T(MT_LAYER_TANH)                                                           \
-    T(MT_LAYER_TRANSPOSE)
+    T(MT_LAYER_TRANSPOSE)                                                      \
+    T(MT_LAYER_UPSAMPLE)
 
 typedef enum {
 #define T(name) name,
@@ -532,6 +539,12 @@ typedef struct mt_layer {
             int pads[4];
         } max_pool_2d;
 
+        // MT_LAYER_PAD
+        struct {
+            char mode; // 0: constant, 1: edge, 2: reflect
+            int  value;
+        } pad;
+
         // MT_LAYER_RESIZE
         struct {
             int mode;
@@ -548,6 +561,11 @@ typedef struct mt_layer {
             int n_split;
             int splits[MAX_TENSOR_SPLITS];
         } split;
+
+        // MT_LAYER_UPSAMPLE
+        struct {
+            int mode; // 0: nearest, 1: bilinear
+        } upsample;
 
         // MT_LAYER_TRANSPOSE
         struct {
@@ -747,11 +765,11 @@ mt_tensor *mt_adaptive_avg_pool_2d(mt_tensor *x, int out_h, int out_w) {
                 "input tensor must have 4 dimensions (an image), found %d",
                 x->ndim);
 
-    int   channels = x->shape[0];
-    int   in_h     = x->shape[1];
-    int   in_w     = x->shape[2];
-    float stride_h = (float)in_h / out_h;
-    float stride_w = (float)in_w / out_w;
+    int      channels = x->shape[0];
+    int      in_h     = x->shape[1];
+    int      in_w     = x->shape[2];
+    mt_float stride_h = (mt_float)in_h / out_h;
+    mt_float stride_w = (mt_float)in_w / out_w;
 
     // Allocate output tensor
     mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(channels, out_h, out_w), 3);
@@ -1355,6 +1373,11 @@ MTDEF void mt__im2col(const mt_float *data, const int C_in, const int H_in,
                       const int pad_w_begin, const int H_out, const int W_out,
                       const int dilation_h, const int dilation_w,
                       mt_float *im2col_data) {
+    if (!im2col_data) {
+        ERROR("im2col_data is NULL, possibly due to malloc failure/out of "
+              "memory");
+    }
+
     const int channels_col = C_in * K_h * K_w;
     const int output_size  = H_out * W_out;
 
@@ -1707,13 +1730,13 @@ mt_tensor *mt_image_resize(mt_tensor *img, int target_height,
     mt_tensor *resized =
         mt_tensor_alloc(MT_ARR_INT(channels, target_height, target_width), 3);
 
-    float height_scale = (float)(src_height - 1) / (target_height - 1);
-    float width_scale  = (float)(src_width - 1) / (target_width - 1);
+    mt_float height_scale = (mt_float)(src_height - 1) / (target_height - 1);
+    mt_float width_scale  = (mt_float)(src_width - 1) / (target_width - 1);
 
     // Pre-compute source y coordinates and their weights
-    float *src_y  = (float *)MT_MALLOC(target_height * sizeof(float));
-    int   *src_y0 = (int *)MT_MALLOC(target_height * sizeof(int));
-    float *dy     = (float *)MT_MALLOC(target_height * sizeof(float));
+    mt_float *src_y  = (mt_float *)MT_MALLOC(target_height * sizeof(mt_float));
+    int      *src_y0 = (int *)MT_MALLOC(target_height * sizeof(int));
+    mt_float *dy     = (mt_float *)MT_MALLOC(target_height * sizeof(mt_float));
 
     for (int y = 0; y < target_height; y++) {
         src_y[y]  = y * height_scale;
@@ -1722,9 +1745,9 @@ mt_tensor *mt_image_resize(mt_tensor *img, int target_height,
     }
 
     // Pre-compute source x coordinates and their weights
-    float *src_x  = (float *)MT_MALLOC(target_width * sizeof(float));
-    int   *src_x0 = (int *)MT_MALLOC(target_width * sizeof(int));
-    float *dx     = (float *)MT_MALLOC(target_width * sizeof(float));
+    mt_float *src_x  = (mt_float *)MT_MALLOC(target_width * sizeof(mt_float));
+    int      *src_x0 = (int *)MT_MALLOC(target_width * sizeof(int));
+    mt_float *dx     = (mt_float *)MT_MALLOC(target_width * sizeof(mt_float));
 
     for (int x = 0; x < target_width; x++) {
         src_x[x]  = x * width_scale;
@@ -1738,18 +1761,18 @@ mt_tensor *mt_image_resize(mt_tensor *img, int target_height,
             resized->data + c * target_height * target_width;
 
         for (int y = 0; y < target_height; y++) {
-            int   y0        = src_y0[y];
-            int   y1        = (y0 < src_height - 1) ? y0 + 1 : y0;
-            float weight_y0 = 1 - dy[y];
-            float weight_y1 = dy[y];
+            int      y0        = src_y0[y];
+            int      y1        = (y0 < src_height - 1) ? y0 + 1 : y0;
+            mt_float weight_y0 = 1 - dy[y];
+            mt_float weight_y1 = dy[y];
 
             for (int x = 0; x < target_width; x++) {
-                int   x0        = src_x0[x];
-                int   x1        = (x0 < src_width - 1) ? x0 + 1 : x0;
-                float weight_x0 = 1 - dx[x];
-                float weight_x1 = dx[x];
+                int      x0        = src_x0[x];
+                int      x1        = (x0 < src_width - 1) ? x0 + 1 : x0;
+                mt_float weight_x0 = 1 - dx[x];
+                mt_float weight_x1 = dx[x];
 
-                float val =
+                mt_float val =
                     weight_y0 * (weight_x0 * src_channel[y0 * src_width + x0] +
                                  weight_x1 * src_channel[y0 * src_width + x1]) +
                     weight_y1 * (weight_x0 * src_channel[y1 * src_width + x0] +
@@ -2130,8 +2153,9 @@ static void mt__generic_sgemm(int m, int n, int k, mt_float alpha,
 #endif
 
 // Unified SGEMM interface
-MTDEF void mt__sgemm(int m, int n, int k, float alpha, const float *A, int lda,
-                     const float *B, int ldb, float beta, float *C, int ldc) {
+MTDEF void mt__sgemm(int m, int n, int k, mt_float alpha, const mt_float *A,
+                     int lda, const mt_float *B, int ldb, mt_float beta,
+                     mt_float *C, int ldc) {
 #ifdef MT_USE_NEON
     mt__neon_sgemm(m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);
 #elif defined(MT_USE_BLAS)
@@ -2784,6 +2808,64 @@ MTDEF mt_tensor *mt_sum(mt_tensor *input, int axis, int keep_dims) {
     return mt_reduce(input, axis, mt_reduce_sum_fn, 0, keep_dims);
 }
 
+MTDEF mt_tensor *mt_upsample(mt_tensor *input, float x_scale, float y_scale,
+                             int mode) {
+    MT_ASSERT(input->ndim == 4, "Input tensor must have 4 dimensions");
+    MT_ASSERT(mode == 0 || mode == 1, "Invalid mode");
+
+    if (mode == 0) {
+        WARN_LOG("Nearest upsampling is not implemented yet");
+    }
+
+    int n = input->shape[0];
+    int c = input->shape[1];
+    int h = input->shape[2];
+    int w = input->shape[3];
+
+    // Adding 0.5 before casting to int ensures rounding to the nearest integer
+    // rather than truncating.
+    int        new_h  = (int)(h * y_scale + 0.5f);
+    int        new_w  = (int)(w * x_scale + 0.5f);
+    mt_tensor *output = mt_tensor_alloc(MT_ARR_INT(n, c, new_h, new_w), 4);
+
+    // Process each item in the batch
+    for (int batch = 0; batch < n; batch++) {
+        // Extract 3D tensor (CHW) for this batch item
+        mt_tensor *batch_slice = mt_tensor_alloc(MT_ARR_INT(c, h, w), 3);
+
+        // Copy data from input to batch_slice
+        for (int ch = 0; ch < c; ch++) {
+            for (int i = 0; i < h; i++) {
+                for (int j = 0; j < w; j++) {
+                    int input_idx = batch * c * h * w + ch * h * w + i * w + j;
+                    int slice_idx = ch * h * w + i * w + j;
+                    batch_slice->data[slice_idx] = input->data[input_idx];
+                }
+            }
+        }
+
+        // Resize the 3D tensor using bilinear interpolation
+        mt_tensor *resized = mt_image_resize(batch_slice, new_h, new_w);
+        mt_tensor_free(batch_slice);
+
+        // Copy the resized data to the output tensor
+        for (int ch = 0; ch < c; ch++) {
+            for (int i = 0; i < new_h; i++) {
+                for (int j = 0; j < new_w; j++) {
+                    int resized_idx = ch * new_h * new_w + i * new_w + j;
+                    int output_idx  = batch * c * new_h * new_w +
+                                     ch * new_h * new_w + i * new_w + j;
+                    output->data[output_idx] = resized->data[resized_idx];
+                }
+            }
+        }
+
+        mt_tensor_free(resized);
+    }
+
+    return output;
+}
+
 // Helper function to handle negative indices and clamping
 MTDEF int mt__adjust_index(int index, int dim, int step) {
     if (index < 0) {
@@ -2961,7 +3043,7 @@ void mt_tensor_print(mt_tensor *t) {
         if (i < t->ndim - 1)
             printf(", ");
     }
-    printf(", dtype=float)\n");
+    printf(", dtype=mt_float)\n");
 
     // Calculate strides
     int strides[MAX_TENSOR_NDIM];
@@ -3073,6 +3155,31 @@ void mt_tensor_unsqueeze_inplace(mt_tensor *t, int dim) {
     t->ndim += 1;
 }
 
+MTDEF void mt_tensor_squeeze_inplace(mt_tensor *t) {
+    int new_ndim = 0;
+    int new_shape[MAX_TENSOR_NDIM];
+
+    // Keep only dimensions that are not 1
+    for (int i = 0; i < t->ndim; i++) {
+        if (t->shape[i] != 1) {
+            new_shape[new_ndim] = t->shape[i];
+            new_ndim++;
+        }
+    }
+
+    // Update tensor dimensions
+    t->ndim = new_ndim;
+    for (int i = 0; i < new_ndim; i++) {
+        t->shape[i] = new_shape[i];
+    }
+
+    // If all dimensions were squeezed, keep at least one dimension of size 1
+    if (new_ndim == 0) {
+        t->ndim     = 1;
+        t->shape[0] = 1;
+    }
+}
+
 mt_tensor *mt_tensor_alloc(int *shape, int ndim) {
     MT_ASSERT_F(ndim <= MAX_TENSOR_NDIM, "ndim cannot exceed %d, found %d",
                 MAX_TENSOR_NDIM, ndim);
@@ -3161,6 +3268,8 @@ MTDEF mt_tensor *mt_tensor_fread(FILE *fp) {
 }
 
 MTDEF void mt_tensor_free(mt_tensor *t) {
+    if (t == NULL)
+        return;
     if (t->data != NULL)
         free(t->data);
     free(t);
@@ -3214,7 +3323,7 @@ MTDEF int mt_tensor_save_image(mt_tensor *t, char *filename, int quality) {
     for (int row = 0; row < h; row++) {
         for (int col = 0; col < w; col++) {
             for (int chan = 0; chan < c; chan++) {
-                float pixel_value = t->data[chan * h * w + row * w + col];
+                mt_float pixel_value = t->data[chan * h * w + row * w + col];
                 // Clamp values to 0-1 range
                 pixel_value =
                     pixel_value < 0 ? 0 : (pixel_value > 1 ? 1 : pixel_value);
@@ -3632,7 +3741,8 @@ MTDEF void mt__layer_forward(mt_layer *l, mt_model *model) {
         if (no_of_inputs == 3) {
             b = model->tensors[l->data.conv_2d.b_id];
         } else {
-            b = mt_tensor_alloc_values((int[]){w->shape[0]}, 1, (float[]){0});
+            b = mt_tensor_alloc_values((int[]){w->shape[0]}, 1,
+                                       (mt_float[]){0});
         }
 
         int kernel_shape[] = {w->shape[2], w->shape[3]};
@@ -3973,6 +4083,14 @@ MTDEF void mt__layer_forward(mt_layer *l, mt_model *model) {
     case MT_LAYER_TRANSPOSE: {
         mt_tensor *input = model->tensors[l->inputs[0]];
         res = mt_tensor_permute_dims(input, l->data.transpose.perm);
+        mt__model_set_tensor(model, l->outputs[0], res);
+        break;
+    }
+    case MT_LAYER_UPSAMPLE: {
+        mt_tensor *input  = model->tensors[l->inputs[0]];
+        mt_tensor *scales = model->tensors[l->inputs[1]];
+        res               = mt_upsample(input, scales->data[2], scales->data[3],
+                                        l->data.upsample.mode);
         mt__model_set_tensor(model, l->outputs[0], res);
         break;
     }
