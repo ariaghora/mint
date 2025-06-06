@@ -1,3 +1,6 @@
+This example uses resnet from torchvision converted into onnx.
+
+```python
 from torchvision import models
 import torch
 
@@ -28,3 +31,4 @@ if __name__ == "__main__":
             "output": {0: "batch_size"},
         },
     )
+```

@@ -28,4 +28,4 @@ $(TARGET).out: $(SRC) $(LIB_SRC) ../../mint.h
 	$(CC) $(CFLAGS) -o $@ $(SRC) $(LIB_SRC) $(LDFLAGS)
 
 clean:
-	rm -f $(TARGET).out *.onnx *.mt
+	rm -f $(TARGET).out 

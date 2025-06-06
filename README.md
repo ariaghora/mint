@@ -8,7 +8,7 @@ it is possible to integrate with the other libraries such as BLAS if needed.
 - NumPy style broadcasting
 - BLAS backend (optional)
 - ARM NEON SIMD acceleration (enable with `#define MT_USE_NEON`).
-  - For Apple Silicon devices (M1/M2/M3), you can additionally define `#define MT_USE_APPLE_ACCELERATE` to even more performance. Specify Accelerate framework during compilation.
+  - For Apple Silicon devices, you can additionally define `#define MT_USE_APPLE_ACCELERATE` to even more performance. Specify Accelerate framework during compilation.
 
 ## Issues
 
