@@ -427,12 +427,12 @@ MTDEF void              mt_layer_debug_info(mt_layer *l);
 #define MT_MAX_THREADS 32
 #endif
 
-#define MAX_LAYER_COUNT             1000
+#define MAX_LAYER_COUNT             2048
 #define MAX_LAYER_INPUT_COUNT       10
 #define MAX_LAYER_OUTPUT_COUNT      10
 #define MAX_LAYER_PREV_COUNT        5
 #define MAX_LAYER_NEXT_COUNT        5
-#define MAX_MODEL_INITIALIZER_COUNT 1500
+#define MAX_MODEL_INITIALIZER_COUNT 4096
 #define MAX_TENSOR_NDIM             5
 #define MAX_TENSOR_SPLITS           5
 #define MAX_INPUT_OUTPUT_COUNT      50

@@ -130,19 +130,55 @@ mt_onnx__tensor_proto_to_mt_tensor(Onnx__TensorProto *tensor_proto) {
                 tensor->data[i] = tensor_proto->float_data[i];
             }
         } else if (tensor_proto->raw_data.len > 0) {
-            // Create a properly aligned copy of the data
             mt_float *float_data = (mt_float *)tensor_proto->raw_data.data;
-
-            // Make sure data is aligned for SIMD operations (memory alignment
-            // critical for performance) Create a temp buffer that's properly
-            // aligned - this matches what the .mt loader does
             mt_float *aligned_data =
                 (mt_float *)MT_MALLOC(n_element * sizeof(mt_float));
             memcpy(aligned_data, float_data, n_element * sizeof(mt_float));
-
-            // Use the aligned data
             memcpy(tensor->data, aligned_data, n_element * sizeof(mt_float));
             free(aligned_data);
+        } else {
+            ERROR_F("No data found in tensor %s", tensor_proto->name);
+        }
+        break;
+    case ONNX__TENSOR_PROTO__DATA_TYPE__INT64:
+        if (tensor_proto->n_int64_data > 0) {
+            for (size_t i = 0; i < n_element && i < tensor_proto->n_int64_data;
+                 i++) {
+                tensor->data[i] = (mt_float)tensor_proto->int64_data[i];
+            }
+        } else if (tensor_proto->raw_data.len > 0) {
+            int64_t *int64_data = (int64_t *)tensor_proto->raw_data.data;
+            int64_t *aligned_data =
+                (int64_t *)MT_MALLOC(n_element * sizeof(int64_t));
+            if (aligned_data == NULL) {
+                ERROR("Failed to allocate memory for aligned INT64 data");
+                mt_tensor_free(tensor);
+                return NULL;
+            }
+            memcpy(aligned_data, int64_data, n_element * sizeof(int64_t));
+            // Cast to float when copying
+            for (size_t i = 0; i < n_element; i++) {
+                tensor->data[i] = (mt_float)aligned_data[i];
+            }
+            free(aligned_data);
+        } else {
+            ERROR_F("No data found in tensor %s", tensor_proto->name);
+        }
+        break;
+    case ONNX__TENSOR_PROTO__DATA_TYPE__UINT8:
+        if (tensor_proto->n_int32_data > 0) {
+            for (size_t i = 0; i < n_element && i < tensor_proto->n_int32_data;
+                 i++) {
+                tensor->data[i] =
+                    (mt_float)(uint8_t)tensor_proto->int32_data[i];
+            }
+        } else if (tensor_proto->raw_data.len > 0) {
+            uint8_t *uint8_data = (uint8_t *)tensor_proto->raw_data.data;
+            // Cast to float when copying
+            for (size_t i = 0; i < n_element && i < tensor_proto->raw_data.len;
+                 i++) {
+                tensor->data[i] = (mt_float)uint8_data[i];
+            }
         } else {
             ERROR_F("No data found in tensor %s", tensor_proto->name);
         }
