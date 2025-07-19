@@ -51,6 +51,14 @@ MTDEF mt_layer_kind mt_onnx__get_layer_kind(const char *op_type) {
         return MT_LAYER_UPSAMPLE;
     } else if (strcmp(op_type, "Constant") == 0) {
         return MT_LAYER_CONSTANT;
+    } else if (strcmp(op_type, "LRN") == 0) {
+        return MT_LAYER_LOCAL_RESPONSE_NORM;
+    } else if (strcmp(op_type, "Reshape") == 0) {
+        return MT_LAYER_RESHAPE;
+    } else if (strcmp(op_type, "Dropout") == 0) {
+        return MT_LAYER_DROPOUT;
+    } else if (strcmp(op_type, "Softmax") == 0) {
+        return MT_LAYER_SOFTMAX;
     }
     return MT_LAYER_UNKNOWN;
 }
@@ -508,6 +516,47 @@ MTDEF void mt_onnx__make_upsample(mt_layer *layer, mt_model *model, int opset,
     }
 }
 
+MTDEF void mt_onnx__make_local_response_norm(mt_layer *layer, int opset,
+                                             Onnx__NodeProto *node_proto) {
+    // Default values:
+    layer->data.local_response_norm.size  = 5;
+    layer->data.local_response_norm.alpha = 1e-4;
+    layer->data.local_response_norm.beta  = 0.75;
+    layer->data.local_response_norm.bias  = 1;
+
+    // Read attributes of local_response_norm layer: size, alpha, beta
+    if (opset >= 1 && opset <= 22) {
+        for (size_t i = 0; i < node_proto->n_attribute; i++) {
+            Onnx__AttributeProto *attribute_proto = node_proto->attribute[i];
+            if (strcmp(attribute_proto->name, "size") == 0) {
+                layer->data.local_response_norm.size = attribute_proto->i;
+            } else if (strcmp(attribute_proto->name, "alpha") == 0) {
+                layer->data.local_response_norm.alpha = attribute_proto->f;
+            } else if (strcmp(attribute_proto->name, "beta") == 0) {
+                layer->data.local_response_norm.beta = attribute_proto->f;
+            } else if (strcmp(attribute_proto->name, "bias") == 0) {
+                layer->data.local_response_norm.bias = attribute_proto->f;
+            }
+        }
+    }
+}
+
+MTDEF void mt_onnx__make_softmax(mt_layer *layer, int opset,
+                                 Onnx__NodeProto *node_proto) {
+    // Default values:
+    layer->data.softmax.axis = -1;
+
+    // Read attributes of softmax layer: axis
+    if (opset >= 1 && opset <= 22) {
+        for (size_t i = 0; i < node_proto->n_attribute; i++) {
+            Onnx__AttributeProto *attribute_proto = node_proto->attribute[i];
+            if (strcmp(attribute_proto->name, "axis") == 0) {
+                layer->data.softmax.axis = attribute_proto->i;
+            }
+        }
+    }
+}
+
 MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
                                  size_t         model_bytes_len) {
     Onnx__ModelProto *model_proto = onnx__model_proto__unpack(
@@ -769,6 +818,15 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
         layer->output_count = node_proto->n_output;
         layer->id           = i;
         model->layers[i]    = layer;
+        // if layer->name is empty, use `layer_<id>_<type>`
+        if (strlen(node_proto->name) == 0) {
+            snprintf(layer->name, MAX_LAYER_NAME_LEN, "layer_%zu_%s", i,
+                     node_proto->op_type);
+            DEBUG_LOG_F("Layer %s has no name, using default name %s",
+                        node_proto->name, layer->name);
+        } else {
+            strcpy(layer->name, node_proto->name);
+        }
 
         for (size_t j = 0; j < node_proto->n_input; j++) {
             int input_id = mt_onnx__get_tensor_id(tensor_infos, tensor_idx,
@@ -810,12 +868,20 @@ MTDEF mt_model *mt_onnx_read_mem(unsigned char *model_bytes,
         case MT_LAYER_UPSAMPLE:
             mt_onnx__make_upsample(layer, model, opset, node_proto);
             break;
+        case MT_LAYER_LOCAL_RESPONSE_NORM:
+            mt_onnx__make_local_response_norm(layer, opset, node_proto);
+            break;
+        case MT_LAYER_SOFTMAX:
+            mt_onnx__make_softmax(layer, opset, node_proto);
+            break;
         // Pass through, since there's no data to parse
         case MT_LAYER_ADD:
         case MT_LAYER_EXP:
         case MT_LAYER_RELU:
         case MT_LAYER_GLOBAL_AVG_POOL:
         case MT_LAYER_CONSTANT:
+        case MT_LAYER_RESHAPE:
+        case MT_LAYER_DROPOUT:
             break;
         default:
             ERROR_F("layer kind %s is not supported", node_proto->op_type);

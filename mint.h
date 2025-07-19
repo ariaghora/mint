@@ -437,6 +437,7 @@ MTDEF void              mt_layer_debug_info(mt_layer *l);
 #define MAX_TENSOR_SPLITS           5
 #define MAX_INPUT_OUTPUT_COUNT      50
 #define MAX_INPUT_OUTPUT_NAME_LEN   50
+#define MAX_LAYER_NAME_LEN          50
 
 #define MATMUL_BLOCK_SIZE 64
 #define UNROLL_FACTOR     16
@@ -466,6 +467,7 @@ typedef struct mt_tensor {
 
 typedef struct mt_layer {
     int           id;
+    char          name[MAX_LAYER_NAME_LEN];
     mt_layer_kind kind;
     /* This member holds data of different layer types. Some layers do not
      * have any data/attribute to store, such as ReLU, simple binary
